@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
@@ -33,3 +33,16 @@ class Course(Base):
 
     # relation: many courses -> one teacher
     teacher = relationship("Teacher", back_populates="courses")
+
+
+class Enrollment(Base):
+    __tablename__ = "enrollments"
+    id = Column(Integer, primary_key=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    course_id  = Column(Integer, ForeignKey("courses.id",  ondelete="CASCADE"), nullable=False)
+
+    __table_args__ = (UniqueConstraint("student_id", "course_id", name="uq_student_course"),)
+
+    # optional relationships (handy for eager loads)
+    student = relationship("Student")
+    course  = relationship("Course")
