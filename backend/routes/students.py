@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from typing import Optional
+
 
 from backend.database import get_db_connection
 from backend.models import Student
@@ -26,8 +28,19 @@ def add_student(payload: StudentCreate, db: Session = Depends(get_db_connection)
 # READ — list all
 # --------------
 @router.get("/", response_model=list[StudentResponse])
-def list_students(db: Session = Depends(get_db_connection)):
-    return db.query(Student).order_by(Student.id).all()
+def list_students(
+    department: Optional[str] = None,
+    name_contains: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db_connection),
+):
+    q = db.query(Student)
+    if department:
+        q = q.filter(Student.department == department)
+    if name_contains:
+        q = q.filter(Student.name.ilike(f"%{name_contains}%"))
+    return q.order_by(Student.id).offset(skip).limit(limit).all()
 
 # ----------------
 # READ — single by id

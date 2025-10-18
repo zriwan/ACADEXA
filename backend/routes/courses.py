@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from backend.database import get_db_connection
 from backend.models import Course, Teacher
 from backend.schemas import CourseCreate, CourseUpdate, CourseResponse
+from typing import Optional
+from sqlalchemy import func
 
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
@@ -30,8 +32,22 @@ def create_course(payload: CourseCreate, db: Session = Depends(get_db_connection
     return c
 
 @router.get("/", response_model=list[CourseResponse])
-def list_courses(db: Session = Depends(get_db_connection)):
-    return db.query(Course).order_by(Course.id).all()
+def list_courses(
+    teacher_id: Optional[int] = None,
+    code_contains: Optional[str] = None,
+    title_contains: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db_connection),
+):
+    q = db.query(Course)
+    if teacher_id is not None:
+        q = q.filter(Course.teacher_id == teacher_id)
+    if code_contains:
+        q = q.filter(func.upper(Course.code).like(f"%{code_contains.upper()}%"))
+    if title_contains:
+        q = q.filter(Course.title.ilike(f"%{title_contains}%"))
+    return q.order_by(Course.id).offset(skip).limit(limit).all()
 
 @router.get("/{course_id}", response_model=CourseResponse)
 def get_course(course_id: int, db: Session = Depends(get_db_connection)):
