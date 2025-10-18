@@ -1,6 +1,9 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, UniqueConstraint
+
+from sqlalchemy import Column, Integer, ForeignKey, UniqueConstraint, String, Numeric, DateTime, func
 from sqlalchemy.orm import relationship
 from backend.database import Base
+
+
 
 # --- existing ---
 class Student(Base):
@@ -37,12 +40,20 @@ class Course(Base):
 
 class Enrollment(Base):
     __tablename__ = "enrollments"
-    id = Column(Integer, primary_key=True)
+
+    id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
     course_id  = Column(Integer, ForeignKey("courses.id",  ondelete="CASCADE"), nullable=False)
 
+    # NEW fields
+    semester   = Column(String(20), nullable=True)                      # e.g., "Fall 2025"
+    status     = Column(String(20), nullable=True, default="enrolled")  # enrolled|dropped|completed
+    grade      = Column(Numeric(3, 2), nullable=True)                   # e.g., 3.50
+
+    created_at = Column(DateTime(timezone=False), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=False), server_default=func.now(), onupdate=func.now(), nullable=False)
+
     __table_args__ = (UniqueConstraint("student_id", "course_id", name="uq_student_course"),)
 
-    # optional relationships (handy for eager loads)
     student = relationship("Student")
     course  = relationship("Course")
