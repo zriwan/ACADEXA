@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 
+from ..security import get_current_user, require_admin  # ✅ auth guards
 
 from backend.database import get_db_connection
 from backend.models import Student
@@ -17,7 +18,11 @@ router = APIRouter(prefix="/students", tags=["Students"])
 # CREATE (Day 2 se continued)
 # ---------------------------
 @router.post("/", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
-def add_student(payload: StudentCreate, db: Session = Depends(get_db_connection)):
+def add_student(
+    payload: StudentCreate,
+    db: Session = Depends(get_db_connection),
+    _=Depends(get_current_user),  # ✅ login required
+):
     s = Student(name=payload.name, department=payload.department, gpa=payload.gpa)
     db.add(s)
     db.commit()
@@ -56,7 +61,12 @@ def get_student(student_id: int, db: Session = Depends(get_db_connection)):
 # UPDATE — PUT
 # -----------
 @router.put("/{student_id}", response_model=StudentResponse)
-def update_student(student_id: int, payload: StudentUpdate, db: Session = Depends(get_db_connection)):
+def update_student(
+    student_id: int,
+    payload: StudentUpdate,
+    db: Session = Depends(get_db_connection),
+    _=Depends(get_current_user),  # ✅ login required
+):
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
@@ -74,7 +84,11 @@ def update_student(student_id: int, payload: StudentUpdate, db: Session = Depend
 # DELETE — by id
 # ------------
 @router.delete("/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_student(student_id: int, db: Session = Depends(get_db_connection)):
+def delete_student(
+    student_id: int,
+    db: Session = Depends(get_db_connection),
+    _=Depends(require_admin),  # ✅ admin-only
+):
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")

@@ -1,15 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from typing import Optional
+from sqlalchemy import func
+
 from backend.database import get_db_connection
 from backend.models import Course, Teacher
 from backend.schemas import CourseCreate, CourseUpdate, CourseResponse
-from typing import Optional
-from sqlalchemy import func
+
+# ✅ NEW: auth dependencies
+from ..security import get_current_user, require_admin
 
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
 @router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
-def create_course(payload: CourseCreate, db: Session = Depends(get_db_connection)):
+def create_course(
+    payload: CourseCreate,
+    db: Session = Depends(get_db_connection),
+    _=Depends(get_current_user),   # ✅ login required
+):
     # unique code
     exists = db.query(Course).filter(Course.code == payload.code).first()
     if exists:
@@ -57,7 +65,12 @@ def get_course(course_id: int, db: Session = Depends(get_db_connection)):
     return c
 
 @router.put("/{course_id}", response_model=CourseResponse)
-def update_course(course_id: int, payload: CourseUpdate, db: Session = Depends(get_db_connection)):
+def update_course(
+    course_id: int,
+    payload: CourseUpdate,
+    db: Session = Depends(get_db_connection),
+    _=Depends(get_current_user),   # ✅ login required
+):
     c = db.get(Course, course_id)
     if not c:
         raise HTTPException(status_code=404, detail="Course not found")
@@ -83,7 +96,11 @@ def update_course(course_id: int, payload: CourseUpdate, db: Session = Depends(g
     return c
 
 @router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_course(course_id: int, db: Session = Depends(get_db_connection)):
+def delete_course(
+    course_id: int,
+    db: Session = Depends(get_db_connection),
+    _=Depends(require_admin),      # ✅ admin-only
+):
     c = db.get(Course, course_id)
     if not c:
         raise HTTPException(status_code=404, detail="Course not found")

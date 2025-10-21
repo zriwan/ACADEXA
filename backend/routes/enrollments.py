@@ -1,4 +1,3 @@
-# backend/routes/enrollments.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Optional
 
@@ -12,6 +11,9 @@ from backend.schemas import (
     EnrollmentResponse, EnrollmentDetailResponse
 )
 
+# ✅ NEW: auth dependencies
+from ..security import get_current_user, require_admin
+
 router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
 
 # -----------------------
@@ -23,7 +25,11 @@ router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
     status_code=status.HTTP_201_CREATED,
     responses={400: {"description": "Student/Course not found or already enrolled"}}
 )
-def enroll(payload: EnrollmentCreate, db: Session = Depends(get_db_connection)):
+def enroll(
+    payload: EnrollmentCreate,
+    db: Session = Depends(get_db_connection),
+    _=Depends(get_current_user),   # ✅ login required
+):
     # FK validation
     if not db.get(Student, payload.student_id):
         raise HTTPException(status_code=400, detail="Student does not exist")
@@ -51,7 +57,12 @@ def enroll(payload: EnrollmentCreate, db: Session = Depends(get_db_connection)):
 # UPDATE (partial)
 # -----------------------
 @router.patch("/{enrollment_id}", response_model=EnrollmentResponse)
-def update_enrollment(enrollment_id: int, payload: EnrollmentUpdate, db: Session = Depends(get_db_connection)):
+def update_enrollment(
+    enrollment_id: int,
+    payload: EnrollmentUpdate,
+    db: Session = Depends(get_db_connection),
+    _=Depends(get_current_user),   # ✅ login required
+):
     e = db.get(Enrollment, enrollment_id)
     if not e:
         raise HTTPException(status_code=404, detail="Enrollment not found")
@@ -77,7 +88,11 @@ def update_enrollment(enrollment_id: int, payload: EnrollmentUpdate, db: Session
 # DELETE (unenroll)
 # -----------------------
 @router.delete("/{enrollment_id}", status_code=status.HTTP_204_NO_CONTENT)
-def unenroll(enrollment_id: int, db: Session = Depends(get_db_connection)):
+def unenroll(
+    enrollment_id: int,
+    db: Session = Depends(get_db_connection),
+    _=Depends(require_admin),      # ✅ admin-only
+):
     e = db.get(Enrollment, enrollment_id)
     if not e:
         raise HTTPException(status_code=404, detail="Enrollment not found")
@@ -93,13 +108,23 @@ def list_student_enrollments(student_id: int, db: Session = Depends(get_db_conne
     # If you prefer strict behavior, uncomment next two lines:
     # if not db.get(Student, student_id):
     #     raise HTTPException(status_code=404, detail="Student not found")
-    return db.query(Enrollment).filter(Enrollment.student_id == student_id).order_by(Enrollment.id).all()
+    return (
+        db.query(Enrollment)
+        .filter(Enrollment.student_id == student_id)
+        .order_by(Enrollment.id)
+        .all()
+    )
 
 @router.get("/course/{course_id}", response_model=list[EnrollmentResponse])
 def list_course_enrollments(course_id: int, db: Session = Depends(get_db_connection)):
     # if not db.get(Course, course_id):
     #     raise HTTPException(status_code=404, detail="Course not found")
-    return db.query(Enrollment).filter(Enrollment.course_id == course_id).order_by(Enrollment.id).all()
+    return (
+        db.query(Enrollment)
+        .filter(Enrollment.course_id == course_id)
+        .order_by(Enrollment.id)
+        .all()
+    )
 
 # -----------------------
 # DETAILS WITH FILTERS + PAGINATION

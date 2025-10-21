@@ -1,6 +1,8 @@
 # backend/schemas.py
+from __future__ import annotations  # ✅ handles forward refs in Pydantic v2
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from typing import Optional
+from typing import Optional, Literal
 from decimal import Decimal
 
 # -------------------------
@@ -70,18 +72,8 @@ class CourseResponse(BaseModel):
     teacher_id: Optional[int] = None
 
 # -------------------------
-# Enrollments  (❗️missing before)
+# Enrollments (single, extended versions only)
 # -------------------------
-class EnrollmentCreate(BaseModel):
-    student_id: int
-    course_id: int
-
-class EnrollmentResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    student_id: int
-    course_id: int
-
 class StudentBrief(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -116,13 +108,35 @@ class EnrollmentResponse(BaseModel):
     status:   Optional[str] = None
     grade:    Optional[float] = None
 
-# If you added Day 6 Step-1 “detail” models earlier, extend them like this:
-# (Assumes StudentBrief and CourseBrief already exist above)
 class EnrollmentDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     semester: Optional[str] = None
     status:   Optional[str] = None
     grade:    Optional[float] = None
-    student: "StudentBrief"
-    course:  "CourseBrief"
+    student: StudentBrief
+    course:  CourseBrief
+
+# ======================
+# AUTH SCHEMAS (Day 8)
+# ======================
+class UserBase(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: EmailStr
+    role: Literal["admin", "user"] = "user"
+
+class UserCreate(UserBase):
+    password: str = Field(min_length=6, max_length=128)
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserResponse(UserBase):
+    id: int
+    model_config = {"from_attributes": True}
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    refresh_token: Optional[str] = None
