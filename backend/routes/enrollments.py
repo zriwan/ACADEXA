@@ -1,20 +1,21 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from typing import Optional
-
-from sqlalchemy.orm import Session, selectinload
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, selectinload
 
 from backend.database import get_db_connection
-from backend.models import Enrollment, Student, Course
+from backend.models import Course, Enrollment, Student
 from backend.schemas import (
-    EnrollmentCreate, EnrollmentUpdate,
-    EnrollmentResponse, EnrollmentDetailResponse
+    EnrollmentCreate,
+    EnrollmentDetailResponse,
+    EnrollmentResponse,
+    EnrollmentUpdate,
 )
 
 # ✅ NEW: auth dependencies
 from ..security import get_current_user, require_admin
 
 router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
+
 
 # -----------------------
 # CREATE
@@ -23,12 +24,12 @@ router = APIRouter(prefix="/enrollments", tags=["Enrollments"])
     "/",
     response_model=EnrollmentResponse,
     status_code=status.HTTP_201_CREATED,
-    responses={400: {"description": "Student/Course not found or already enrolled"}}
+    responses={400: {"description": "Student/Course not found or already enrolled"}},
 )
 def enroll(
     payload: EnrollmentCreate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),   # ✅ login required
+    _=Depends(get_current_user),  # ✅ login required
 ):
     # FK validation
     if not db.get(Student, payload.student_id):
@@ -49,9 +50,12 @@ def enroll(
     except IntegrityError:
         db.rollback()
         # UniqueConstraint on (student_id, course_id)
-        raise HTTPException(status_code=400, detail="Student already enrolled in this course")
+        raise HTTPException(
+            status_code=400, detail="Student already enrolled in this course"
+        )
     db.refresh(e)
     return e
+
 
 # -----------------------
 # UPDATE (partial)
@@ -61,7 +65,7 @@ def update_enrollment(
     enrollment_id: int,
     payload: EnrollmentUpdate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),   # ✅ login required
+    _=Depends(get_current_user),  # ✅ login required
 ):
     e = db.get(Enrollment, enrollment_id)
     if not e:
@@ -70,7 +74,9 @@ def update_enrollment(
     if payload.status is not None:
         allowed = {"enrolled", "dropped", "completed"}
         if payload.status not in allowed:
-            raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {', '.join(allowed)}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid status. Allowed: {', '.join(allowed)}"
+            )
         e.status = payload.status
 
     if payload.semester is not None:
@@ -84,6 +90,7 @@ def update_enrollment(
     db.refresh(e)
     return e
 
+
 # -----------------------
 # DELETE (unenroll)
 # -----------------------
@@ -91,7 +98,7 @@ def update_enrollment(
 def unenroll(
     enrollment_id: int,
     db: Session = Depends(get_db_connection),
-    _=Depends(require_admin),      # ✅ admin-only
+    _=Depends(require_admin),  # ✅ admin-only
 ):
     e = db.get(Enrollment, enrollment_id)
     if not e:
@@ -99,6 +106,7 @@ def unenroll(
     db.delete(e)
     db.commit()
     return None
+
 
 # -----------------------
 # SIMPLE LISTS
@@ -115,6 +123,7 @@ def list_student_enrollments(student_id: int, db: Session = Depends(get_db_conne
         .all()
     )
 
+
 @router.get("/course/{course_id}", response_model=list[EnrollmentResponse])
 def list_course_enrollments(course_id: int, db: Session = Depends(get_db_connection)):
     # if not db.get(Course, course_id):
@@ -126,14 +135,17 @@ def list_course_enrollments(course_id: int, db: Session = Depends(get_db_connect
         .all()
     )
 
+
 # -----------------------
 # DETAILS WITH FILTERS + PAGINATION
 # -----------------------
-@router.get("/student/{student_id}/details", response_model=list[EnrollmentDetailResponse])
+@router.get(
+    "/student/{student_id}/details", response_model=list[EnrollmentDetailResponse]
+)
 def list_student_enrollments_with_details(
     student_id: int,
-    semester: Optional[str] = None,
-    status: Optional[str] = None,
+    semester: str | None = None,
+    status: str | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db_connection),
@@ -153,11 +165,14 @@ def list_student_enrollments_with_details(
 
     return q.order_by(Enrollment.id).offset(skip).limit(limit).all()
 
-@router.get("/course/{course_id}/details", response_model=list[EnrollmentDetailResponse])
+
+@router.get(
+    "/course/{course_id}/details", response_model=list[EnrollmentDetailResponse]
+)
 def list_course_enrollments_with_details(
     course_id: int,
-    semester: Optional[str] = None,
-    status: Optional[str] = None,
+    semester: str | None = None,
+    status: str | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db_connection),

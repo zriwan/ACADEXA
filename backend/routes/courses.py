@@ -1,22 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
-from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from backend.database import get_db_connection
 from backend.models import Course, Teacher
-from backend.schemas import CourseCreate, CourseUpdate, CourseResponse
+from backend.schemas import CourseCreate, CourseResponse, CourseUpdate
 
 # ✅ NEW: auth dependencies
 from ..security import get_current_user, require_admin
 
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
+
 @router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
 def create_course(
     payload: CourseCreate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),   # ✅ login required
+    _=Depends(get_current_user),  # ✅ login required
 ):
     # unique code
     exists = db.query(Course).filter(Course.code == payload.code).first()
@@ -39,11 +39,12 @@ def create_course(
     db.refresh(c)
     return c
 
+
 @router.get("/", response_model=list[CourseResponse])
 def list_courses(
-    teacher_id: Optional[int] = None,
-    code_contains: Optional[str] = None,
-    title_contains: Optional[str] = None,
+    teacher_id: int | None = None,
+    code_contains: str | None = None,
+    title_contains: str | None = None,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db_connection),
@@ -57,6 +58,7 @@ def list_courses(
         q = q.filter(Course.title.ilike(f"%{title_contains}%"))
     return q.order_by(Course.id).offset(skip).limit(limit).all()
 
+
 @router.get("/{course_id}", response_model=CourseResponse)
 def get_course(course_id: int, db: Session = Depends(get_db_connection)):
     c = db.get(Course, course_id)
@@ -64,12 +66,13 @@ def get_course(course_id: int, db: Session = Depends(get_db_connection)):
         raise HTTPException(status_code=404, detail="Course not found")
     return c
 
+
 @router.put("/{course_id}", response_model=CourseResponse)
 def update_course(
     course_id: int,
     payload: CourseUpdate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),   # ✅ login required
+    _=Depends(get_current_user),  # ✅ login required
 ):
     c = db.get(Course, course_id)
     if not c:
@@ -95,11 +98,12 @@ def update_course(
     db.refresh(c)
     return c
 
+
 @router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_course(
     course_id: int,
     db: Session = Depends(get_db_connection),
-    _=Depends(require_admin),      # ✅ admin-only
+    _=Depends(require_admin),  # ✅ admin-only
 ):
     c = db.get(Course, course_id)
     if not c:

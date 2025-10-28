@@ -1,6 +1,7 @@
 # tests/test_auth.py
 from uuid import uuid4
 
+
 def login_and_get_token(client, email, password):
     # Your login expects form data with fields 'username' and 'password'
     # Try /auth/login first
@@ -13,6 +14,7 @@ def login_and_get_token(client, email, password):
     assert r.status_code == 200, r.text
     return r.json()["access_token"]
 
+
 def get_me(client, token):
     headers = {"Authorization": f"Bearer {token}"}
     # Try /auth/me first; fallback to /users/me
@@ -20,6 +22,7 @@ def get_me(client, token):
     if r.status_code != 404:
         return r
     return client.get("/users/me", headers=headers)
+
 
 def test_register_login_and_access_protected_route(client):
     unique_email = f"user_{uuid4().hex[:8]}@example.com"
@@ -44,22 +47,29 @@ def test_register_login_and_access_protected_route(client):
     data = me.json()
     assert data.get("email") == unique_email
 
+
 def test_login_wrong_password(client):
     # Create a user first
     email = f"user_{uuid4().hex[:8]}@example.com"
-    client.post("/auth/register", json={
-        "name": "User Two",
-        "email": email,
-        "password": "RightPass123",
-        "role": "user",
-    })
+    client.post(
+        "/auth/register",
+        json={
+            "name": "User Two",
+            "email": email,
+            "password": "RightPass123",
+            "role": "user",
+        },
+    )
 
     # Wrong password using FORM data
     bad = client.post("/auth/login", data={"username": email, "password": "WrongPass"})
     # If you only expose /auth/token:
     if bad.status_code == 404:
-        bad = client.post("/auth/token", data={"username": email, "password": "WrongPass"})
+        bad = client.post(
+            "/auth/token", data={"username": email, "password": "WrongPass"}
+        )
     assert bad.status_code in (400, 401), bad.text
+
 
 def test_protected_without_token(client):
     # Try /auth/me, then fallback to /users/me

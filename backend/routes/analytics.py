@@ -1,12 +1,13 @@
 # backend/routes/analytics.py
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, cast, Float
+from sqlalchemy import Float, cast, func
 from sqlalchemy.orm import Session
 
 from backend.database import get_db_connection
-from backend.models import Student, Course, Teacher, Enrollment
+from backend.models import Course, Enrollment, Student, Teacher
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
+
 
 # ----------------------------------------------
 # A) Enrollment counts per course
@@ -31,6 +32,7 @@ def courses_enrollment_counts(
         .limit(limit)
     )
     return [dict(row._mapping) for row in q.all()]
+
 
 # ----------------------------------------------
 # B) Average GPA of enrolled students per course
@@ -58,6 +60,7 @@ def courses_avg_gpa(
     )
     return [dict(row._mapping) for row in q.all()]
 
+
 # ----------------------------------------------
 # C) Average GPA by department (based on Students table)
 # ----------------------------------------------
@@ -80,6 +83,7 @@ def departments_avg_gpa(
     )
     return [dict(row._mapping) for row in q.all()]
 
+
 # ----------------------------------------------
 # D) Teacher load: courses taught + total enrollments across their courses
 # ----------------------------------------------
@@ -101,7 +105,10 @@ def teachers_course_load(
         .outerjoin(Course, Course.teacher_id == Teacher.id)
         .outerjoin(Enrollment, Enrollment.course_id == Course.id)
         .group_by(Teacher.id)
-        .order_by(func.count(Enrollment.id).desc(), func.count(func.distinct(Course.id)).desc())
+        .order_by(
+            func.count(Enrollment.id).desc(),
+            func.count(func.distinct(Course.id)).desc(),
+        )
         .offset(skip)
         .limit(limit)
     )
