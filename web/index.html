@@ -29,7 +29,7 @@
     <button type="button" onclick="sendCommand()">Send</button>
 
     <p>Response:</p>
-    <pre id="commandOutput" style="background: #f3f3f3; padding: 10px;"></pre>
+  <div id="commandOutput" style="background: #f3f3f3; padding: 10px;"></div>
 
     <script>
       // ==============================
@@ -75,6 +75,9 @@
       // ==============================
       // 2) Send command to backend /voice-command
       // ==============================
+                // ==============================
+      // 2) Send command to backend /voice-command  (Day 15 version)
+      // ==============================
       async function sendCommand() {
         const output = document.getElementById("commandOutput");
         const text = commandInput.value.trim();
@@ -96,12 +99,51 @@
           });
 
           const data = await response.json();
-          output.textContent = JSON.stringify(data, null, 2);
+
+          // Agar result array hai (students / teachers list), to table banao
+          if (Array.isArray(data.result)) {
+            renderTable(data.result, output);
+          } else {
+            // warna normal JSON dikha do (for count, errors etc.)
+            output.textContent = JSON.stringify(data, null, 2);
+          }
         } catch (err) {
           console.error(err);
           output.textContent = "Error calling backend: " + err;
         }
       }
+
+      // Helper: result array ko HTML table me convert karo
+      function renderTable(rows, container) {
+        if (!rows || rows.length === 0) {
+          container.textContent = "No data found.";
+          return;
+        }
+
+        // Columns ko first row ke keys se auto detect karo
+        const columns = Object.keys(rows[0]);
+
+        let html = "<table border='1' cellpadding='5' cellspacing='0'>";
+        html += "<thead><tr>";
+        for (const col of columns) {
+          html += "<th>" + col + "</th>";
+        }
+        html += "</tr></thead>";
+
+        html += "<tbody>";
+        for (const row of rows) {
+          html += "<tr>";
+          for (const col of columns) {
+            html += "<td>" + (row[col] ?? "") + "</td>";
+          }
+          html += "</tr>";
+        }
+        html += "</tbody></table>";
+
+        container.innerHTML = html;
+      }
+
+
     </script>
   </body>
 </html>
