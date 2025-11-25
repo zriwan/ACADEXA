@@ -2,30 +2,106 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Acadexa � Voice Demo</title>
+    <title>Acadexa – Voice Demo</title>
   </head>
   <body>
-    <h3>Acadexa � Voice Demo</h3>
-    <button id="mic">?? Start</button>
-    <p><strong>Transcript:</strong> <span id="transcript"></span></p>
+    <h3>Acadexa – Voice Demo</h3>
+
+    <!-- Existing: Mic-based voice to text -->
+    <button id="mic">🎙 Start</button>
+    <p>
+      <strong>Transcript:</strong>
+      <span id="transcript"></span>
+    </p>
+
+    <hr />
+
+    <!-- Day 14: Text-based Voice Command Tester -->
+    <h2>ACADEXA – Voice Command Tester (Day 14)</h2>
+
+    <label for="commandInput">Type your command:</label>
+    <input
+      id="commandInput"
+      type="text"
+      placeholder="e.g. show students"
+      style="width: 300px;"
+    />
+    <button type="button" onclick="sendCommand()">Send</button>
+
+    <p>Response:</p>
+    <pre id="commandOutput" style="background: #f3f3f3; padding: 10px;"></pre>
+
     <script>
+      // ==============================
+      // 1) Voice recognition (mic → text)
+      // ==============================
       const micBtn = document.getElementById("mic");
-      const out = document.getElementById("transcript");
+      const transcriptSpan = document.getElementById("transcript");
+      const commandInput = document.getElementById("commandInput");
       let recognition;
-      if (!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) {
-        out.textContent = "Web Speech API not supported in this browser.";
+
+      if (
+        !("webkitSpeechRecognition" in window) &&
+        !("SpeechRecognition" in window)
+      ) {
+        transcriptSpan.textContent =
+          "Web Speech API not supported in this browser.";
         micBtn.disabled = true;
       } else {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const SpeechRecognition =
+          window.SpeechRecognition || window.webkitSpeechRecognition;
         recognition = new SpeechRecognition();
         recognition.lang = "en-US";
         recognition.interimResults = false;
-        recognition.onresult = (e) => { out.textContent = e.results[0][0].transcript; };
-        recognition.onerror = (e) => { out.textContent = "Error: " + e.error; };
+
+        recognition.onresult = (e) => {
+          const text = e.results[0][0].transcript;
+          // Show transcript
+          transcriptSpan.textContent = text;
+          // Also put it into the command box so you can send it
+          commandInput.value = text;
+        };
+
+        recognition.onerror = (e) => {
+          console.log("Speech error object:", e);
+          transcriptSpan.textContent = "Error: " + e.error;
+        };
       }
+
       micBtn.addEventListener("click", () => {
         if (recognition) recognition.start();
       });
+
+      // ==============================
+      // 2) Send command to backend /voice-command
+      // ==============================
+      async function sendCommand() {
+        const output = document.getElementById("commandOutput");
+        const text = commandInput.value.trim();
+
+        if (!text) {
+          output.textContent = "Please type a command first.";
+          return;
+        }
+
+        output.textContent = "Sending command...";
+
+        try {
+          const response = await fetch("http://127.0.0.1:8000/voice-command/", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ text: text }),
+          });
+
+          const data = await response.json();
+          output.textContent = JSON.stringify(data, null, 2);
+        } catch (err) {
+          console.error(err);
+          output.textContent = "Error calling backend: " + err;
+        }
+      }
     </script>
   </body>
 </html>
