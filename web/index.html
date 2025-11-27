@@ -8,7 +8,7 @@
     <h3>Acadexa – Voice Demo</h3>
 
     <!-- =======================
-         Day 16: Login Section
+         Day 16 + 17: Login Section
          ======================= -->
     <h2>Login</h2>
     <div
@@ -33,6 +33,7 @@
       <button type="button" onclick="logout()">Logout</button>
 
       <p id="loginStatus" style="margin-top: 10px; font-weight: bold;"></p>
+      <p id="userInfo" style="margin-top: 5px;"></p> <!-- Day 17: current user info -->
     </div>
 
     <!-- Mic-based voice to text -->
@@ -180,6 +181,9 @@
           localStorage.setItem("acadexa_token", token);
           statusEl.textContent = "Login successful. Token stored.";
           statusEl.style.color = "green";
+
+          // Day 17: fetch user details after successful login
+          fetchCurrentUser();
         } catch (err) {
           console.error(err);
           statusEl.textContent = "Login error: " + err;
@@ -190,8 +194,50 @@
       function logout() {
         localStorage.removeItem("acadexa_token");
         const statusEl = document.getElementById("loginStatus");
+        const infoEl = document.getElementById("userInfo");
         statusEl.textContent = "Logged out.";
         statusEl.style.color = "black";
+        infoEl.textContent = "";
+      }
+
+      // ==============================
+      // 2.5) Current user info using /auth/me (Day 17)
+      // ==============================
+      async function fetchCurrentUser() {
+        const infoEl = document.getElementById("userInfo");
+        const token = getToken();
+
+        if (!token) {
+          infoEl.textContent = "";
+          return;
+        }
+
+        try {
+          const response = await fetch("http://127.0.0.1:8000/auth/me", {
+            method: "GET",
+            headers: {
+              Authorization: "Bearer " + token,
+            },
+          });
+
+          if (!response.ok) {
+            infoEl.textContent = "";
+            return;
+          }
+
+          const user = await response.json();
+          // assuming backend returns { name, email, role, ... }
+          infoEl.textContent =
+            "Logged in as " +
+            user.name +
+            " (" +
+            user.email +
+            "), role: " +
+            user.role;
+        } catch (err) {
+          console.error("Error fetching current user:", err);
+          infoEl.textContent = "";
+        }
       }
 
       // ==============================
@@ -274,6 +320,9 @@
 
         container.innerHTML = html;
       }
+
+      // Page load pe agar token already saved hai to current user info dikha do
+      window.addEventListener("load", fetchCurrentUser);
     </script>
   </body>
 </html>
