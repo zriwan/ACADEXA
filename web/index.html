@@ -7,7 +7,35 @@
   <body>
     <h3>Acadexa – Voice Demo</h3>
 
-    <!-- Existing: Mic-based voice to text -->
+    <!-- =======================
+         Day 16: Login Section
+         ======================= -->
+    <h2>Login</h2>
+    <div
+      style="
+        border: 1px solid #ccc;
+        padding: 10px;
+        margin-bottom: 20px;
+        max-width: 400px;
+      "
+    >
+      <label for="loginUsername">Username:</label><br />
+      <input id="loginUsername" type="text" style="width: 100%;" /><br /><br />
+
+      <label for="loginPassword">Password:</label><br />
+      <input
+        id="loginPassword"
+        type="password"
+        style="width: 100%;"
+      /><br /><br />
+
+      <button type="button" onclick="login()">Login</button>
+      <button type="button" onclick="logout()">Logout</button>
+
+      <p id="loginStatus" style="margin-top: 10px; font-weight: bold;"></p>
+    </div>
+
+    <!-- Mic-based voice to text -->
     <button id="mic">🎙 Start</button>
     <p>
       <strong>Transcript:</strong>
@@ -16,8 +44,8 @@
 
     <hr />
 
-    <!-- Day 14: Text-based Voice Command Tester -->
-    <h2>ACADEXA – Voice Command Tester (Day 14)</h2>
+    <!-- Text-based Voice Command Tester -->
+    <h2>ACADEXA – Voice Command Tester</h2>
 
     <label for="commandInput">Type your command:</label>
     <input
@@ -29,9 +57,16 @@
     <button type="button" onclick="sendCommand()">Send</button>
 
     <p>Response:</p>
-  <div id="commandOutput" style="background: #f3f3f3; padding: 10px;"></div>
+    <div id="commandOutput" style="background: #f3f3f3; padding: 10px;"></div>
 
     <script>
+      // ==============================
+      // 0) Helper: get stored token
+      // ==============================
+      function getToken() {
+        return localStorage.getItem("acadexa_token") || null;
+      }
+
       // ==============================
       // 1) Voice recognition (mic → text)
       // ==============================
@@ -54,11 +89,22 @@
         recognition.lang = "en-US";
         recognition.interimResults = false;
 
+        recognition.onstart = () => {
+          console.log("Speech recognition started");
+          transcriptSpan.textContent = "Listening... please speak";
+        };
+
+        recognition.onspeechstart = () => {
+          console.log("Speech detected");
+        };
+
+        recognition.onspeechend = () => {
+          console.log("Speech ended");
+        };
+
         recognition.onresult = (e) => {
           const text = e.results[0][0].transcript;
-          // Show transcript
           transcriptSpan.textContent = text;
-          // Also put it into the command box so you can send it
           commandInput.value = text;
         };
 
@@ -73,10 +119,83 @@
       });
 
       // ==============================
-      // 2) Send command to backend /voice-command
+      // 2) Login / Logout using /auth/token
       // ==============================
-                // ==============================
-      // 2) Send command to backend /voice-command  (Day 15 version)
+      async function login() {
+        const email = document.getElementById("loginUsername").value.trim();
+        const password = document.getElementById("loginPassword").value.trim();
+        const statusEl = document.getElementById("loginStatus");
+
+        if (!email || !password) {
+          statusEl.textContent = "Please enter email and password.";
+          statusEl.style.color = "red";
+          return;
+        }
+
+        statusEl.textContent = "Logging in...";
+        statusEl.style.color = "black";
+
+        try {
+          const body = new URLSearchParams();
+          body.append("grant_type", "password");
+          body.append("username", email);
+          body.append("password", password);
+
+          const response = await fetch("http://127.0.0.1:8000/auth/token", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: body.toString(),
+          });
+
+          const text = await response.text();
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
+
+          console.log("Login response:", response.status, data);
+
+          if (!response.ok) {
+            const detail =
+              (data && data.detail) ||
+              (typeof data === "string" ? data : JSON.stringify(data));
+            statusEl.textContent =
+              "Login failed (" + response.status + "): " + detail;
+            statusEl.style.color = "red";
+            return;
+          }
+
+          const token = data.access_token || data.token;
+          if (!token) {
+            statusEl.textContent =
+              "Login OK but token missing in response. Check backend.";
+            statusEl.style.color = "red";
+            return;
+          }
+
+          localStorage.setItem("acadexa_token", token);
+          statusEl.textContent = "Login successful. Token stored.";
+          statusEl.style.color = "green";
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "Login error: " + err;
+          statusEl.style.color = "red";
+        }
+      }
+
+      function logout() {
+        localStorage.removeItem("acadexa_token");
+        const statusEl = document.getElementById("loginStatus");
+        statusEl.textContent = "Logged out.";
+        statusEl.style.color = "black";
+      }
+
+      // ==============================
+      // 3) Send command to backend /voice-command
       // ==============================
       async function sendCommand() {
         const output = document.getElementById("commandOutput");
@@ -89,22 +208,36 @@
 
         output.textContent = "Sending command...";
 
+        const headers = {
+          "Content-Type": "application/json",
+        };
+
+        const token = getToken();
+        if (token) {
+          headers["Authorization"] = "Bearer " + token;
+        }
+
         try {
           const response = await fetch("http://127.0.0.1:8000/voice-command/", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: headers,
             body: JSON.stringify({ text: text }),
           });
 
           const data = await response.json();
 
-          // Agar result array hai (students / teachers list), to table banao
+          if (!response.ok) {
+            output.textContent =
+              "Error (" +
+              response.status +
+              "): " +
+              (data.detail || JSON.stringify(data));
+            return;
+          }
+
           if (Array.isArray(data.result)) {
             renderTable(data.result, output);
           } else {
-            // warna normal JSON dikha do (for count, errors etc.)
             output.textContent = JSON.stringify(data, null, 2);
           }
         } catch (err) {
@@ -120,7 +253,6 @@
           return;
         }
 
-        // Columns ko first row ke keys se auto detect karo
         const columns = Object.keys(rows[0]);
 
         let html = "<table border='1' cellpadding='5' cellspacing='0'>";
@@ -142,8 +274,6 @@
 
         container.innerHTML = html;
       }
-
-
     </script>
   </body>
 </html>

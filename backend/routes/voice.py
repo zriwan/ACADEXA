@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from backend.database import get_db_connection
-from backend.models import Student, Teacher
+from backend.models import Student, Teacher, User
+from backend.security import get_current_user
 
 router = APIRouter(
     prefix="/voice-command",
@@ -11,12 +12,16 @@ router = APIRouter(
 
 
 @router.post("/")
-def process_voice_command(payload: dict, db: Session = Depends(get_db_connection)):
+def process_voice_command(
+    payload: dict,
+    db: Session = Depends(get_db_connection),
+    current_user: User = Depends(get_current_user),  # ✅ auth required
+):
     """
-    Very simple Day-13 version:
-    - text body se read karega
+    Very simple version:
+    - request body se "text" read karega
     - "show students" / "show teachers" detect karega
-    - DB se data laa kar JSON me return karega
+    - sirf authenticated user ke liye DB se data laa kar JSON me return karega
     """
     text = payload.get("text") if payload else ""
 
@@ -73,5 +78,5 @@ def process_voice_command(payload: dict, db: Session = Depends(get_db_connection
     # Agar text match nahi hua:
     return {
         "command": text,
-        "message": "Sorry, I did not understand the command (Day-13 simple version).",
+        "message": "Sorry, I did not understand the command (simple version).",
     }
