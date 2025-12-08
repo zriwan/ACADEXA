@@ -1,28 +1,44 @@
 # nlp/nlp_processor.py
 # Day 12: Rule-based NLP Processor for ACADEXA
+
 from typing import Dict, Any
 import re
 
 from pydantic import BaseModel
+
 from .intents import match_intent
+
 
 class ParseResult(BaseModel):
     intent: str
     slots: Dict[str, Any]
+
 
 def _normalize(text: str) -> str:
     """
     Simple, robust normalization for voice → text:
     - lowercase
     - strip outer spaces
+    - remove punctuation (except hyphens)
     - collapse multiple spaces
     - keep hyphens and digits (for codes like CS-101, roll numbers, etc.)
     """
+    # lowercase + basic strip
     text = text.lower().strip()
+
     # remove punctuation except hyphens (keep course codes like cs-101)
+    # [^\w\s\-] = anything that's NOT (word char, whitespace, or '-')
     text = re.sub(r"[^\w\s\-]", " ", text)
+
+    # collapse runs of whitespace into a single space
     text = re.sub(r"\s+", " ", text)
+
+    # final cleanup: remove leading/trailing spaces
+    # and normalize any weird spacing edge-cases
+    text = " ".join(text.split())
+
     return text
+
 
 def parse_command(text: str) -> ParseResult:
     """
@@ -33,7 +49,9 @@ def parse_command(text: str) -> ParseResult:
     matched = match_intent(norm)
     if matched:
         return ParseResult(**matched)
+
     return ParseResult(intent="unknown", slots={})
+
 
 # Optional: tiny demo
 if __name__ == "__main__":
@@ -42,9 +60,9 @@ if __name__ == "__main__":
         "Show result of student 125",
         "Delete student 7",
         "List all students in course cs101",
-        "Assign teacher Ahmed to course AI-101",
+        "Assign teacher Ahmed to course AI-101!!!",
         "How many teachers",
-        "Update student 33 name to Hamza Khan",
+        "Update student 33 name to Hamza, Khan",
         "Create course Data Mining",
         "Remove course CS-999",
         "what is this command",  # unknown

@@ -16,7 +16,9 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+# ✅ FIXED: use the *form* login endpoint here
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/token")
 
 
 # ===== Password hashing =====

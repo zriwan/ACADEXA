@@ -15,7 +15,7 @@ router = APIRouter(prefix="/students", tags=["Students"])
 
 
 # ---------------------------
-# CREATE (Day 2 se continued)
+# CREATE
 # ---------------------------
 @router.post("/", response_model=StudentResponse, status_code=status.HTTP_201_CREATED)
 def add_student(
@@ -23,7 +23,15 @@ def add_student(
     db: Session = Depends(get_db_connection),
     _=Depends(get_current_user),  # ✅ login required
 ):
-    s = Student(name=payload.name, department=payload.department, gpa=payload.gpa)
+    """
+    Create a new student.
+    Uses StudentCreate schema (name, department, gpa, etc.).
+    """
+    # Agar future me StudentCreate me extra fields aajayen,
+    # to yeh approach automatically map kar dega:
+    data = payload.model_dump()
+    s = Student(**data)
+
     db.add(s)
     db.commit()
     db.refresh(s)
@@ -31,7 +39,7 @@ def add_student(
 
 
 # --------------
-# READ — list all
+# READ — list all (with filters + pagination)
 # --------------
 @router.get("/", response_model=list[StudentResponse])
 def list_students(
@@ -41,11 +49,23 @@ def list_students(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db_connection),
 ):
+    """
+    List students with optional filters.
+
+    Query params:
+    - department: exact match filter
+    - name_contains: case-insensitive search on name
+    - skip: pagination offset
+    - limit: pagination page size
+    """
     q = db.query(Student)
+
     if department:
         q = q.filter(Student.department == department)
+
     if name_contains:
         q = q.filter(Student.name.ilike(f"%{name_contains}%"))
+
     return q.order_by(Student.id).offset(skip).limit(limit).all()
 
 
@@ -53,12 +73,21 @@ def list_students(
 # READ — single by id
 # ----------------
 @router.get("/{student_id}", response_model=StudentResponse)
-def get_student(student_id: int, db: Session = Depends(get_db_connection)):
+def get_student(
+    student_id: int,
+    db: Session = Depends(get_db_connection),
+):
+    """
+    Get single student by numeric ID.
+    """
     student = db.get(Student, student_id)  # SQLAlchemy 1.4/2.0 style
+
     if not student:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
         )
+
     return student
 
 
@@ -72,15 +101,24 @@ def update_student(
     db: Session = Depends(get_db_connection),
     _=Depends(get_current_user),  # ✅ login required
 ):
+    """
+    Update existing student.
+    Uses StudentUpdate schema.
+    - Agar StudentUpdate me fields OPTIONAL hon,
+      to sirf wahi fields update hongi jo request me aayi hain.
+    """
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
         )
 
-    student.name = payload.name
-    student.department = payload.department
-    student.gpa = payload.gpa
+    # ✅ Partial update using Pydantic v2 style
+    update_data = payload.model_dump(exclude_unset=True)
+
+    for field, value in update_data.items():
+        setattr(student, field, value)
 
     db.add(student)
     db.commit()
@@ -97,11 +135,17 @@ def delete_student(
     db: Session = Depends(get_db_connection),
     _=Depends(require_admin),  # ✅ admin-only
 ):
+    """
+    Delete a student by ID.
+    Admin-only operation.
+    """
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student not found",
         )
+
     db.delete(student)
     db.commit()
     # 204 No Content → koi body return nahi hoti
