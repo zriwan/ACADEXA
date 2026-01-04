@@ -53,14 +53,17 @@ const VoiceConsolePage: React.FC = () => {
   };
 
   // ------- UI helper: render structured table from results -------
+
+  // 🔹 This now ONLY renders the table when results are non-empty.
   const renderResultsTable = () => {
     if (!responseJson) return null;
 
     const results = responseJson.results;
     const type = responseJson.results_type;
 
+    // Empty-check is now handled in renderResultsSection
     if (!results || !Array.isArray(results) || results.length === 0) {
-      return <p>No structured results returned.</p>;
+      return null;
     }
 
     // Students table
@@ -198,6 +201,31 @@ const VoiceConsolePage: React.FC = () => {
     );
   };
 
+  // 🔹 New wrapper: handles empty results vs unknown vs table
+  const renderResultsSection = () => {
+    if (!responseJson) return null;
+
+    const results = responseJson.results;
+    const intent = responseJson.parsed?.intent || "unknown";
+
+    // Empty or missing results
+    if (!results || !Array.isArray(results) || results.length === 0) {
+      // Valid intent but no records → show friendly message
+      if (intent !== "unknown") {
+        return (
+          <p className="mt-4 text-sm text-gray-500">
+            No records found for this command.
+          </p>
+        );
+      }
+      // Unknown intent: we already show the red hint under Info
+      return null;
+    }
+
+    // Normal case – show table
+    return <div className="mt-4">{renderResultsTable()}</div>;
+  };
+
   return (
     <div>
       <h1 className="page-title">AI Command Console</h1>
@@ -270,11 +298,27 @@ const VoiceConsolePage: React.FC = () => {
 
           {responseJson && !loading && (
             <>
-              {/* Info line */}
+              {/* Info line + unknown intent hint */}
               {responseJson.info && (
-                <p style={{ marginBottom: "0.75rem" }}>
-                  <strong>Info:</strong> {responseJson.info}
-                </p>
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <p>
+                    <strong>Info:</strong> {responseJson.info}
+                  </p>
+
+                  {/* 🔹 Unknown intent: show red helper line */}
+                  {(responseJson.parsed?.intent || "unknown") === "unknown" && (
+                    <p
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#b91c1c",
+                        marginTop: "0.25rem",
+                      }}
+                    >
+                      I couldn't understand this command. Try one of the
+                      examples above.
+                    </p>
+                  )}
+                </div>
               )}
 
               {/* Parsed intent summary */}
@@ -283,8 +327,8 @@ const VoiceConsolePage: React.FC = () => {
                 <strong>{responseJson.parsed?.intent || "unknown"}</strong>
               </p>
 
-              {/* Structured results (table) */}
-              {renderResultsTable()}
+              {/* Structured results (table or "No records found") */}
+              {renderResultsSection()}
 
               {/* Raw JSON debug */}
               <h3

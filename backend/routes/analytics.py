@@ -1,168 +1,185 @@
-from typing import List
+# backend/routes/analytics.py
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from backend.database import get_db_connection
-from backend.models import Enrollment, Course, Student, Teacher
-
-from ..security import get_current_user, require_admin  # if you want admin-only, use this
+from backend.security import get_current_user
+from backend.models import Student, Course, Teacher, Enrollment
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 
-# -------------------------------------------------
-# 1) Courses → enrollment counts (most popular etc.)
-# -------------------------------------------------
-@router.get("/courses/enrollment_counts")
-def analytics_course_enrollment_counts(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+@router.get("/summary")
+def get_analytics_summary(
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),  # ✅ at least logged-in user
+    current_user=Depends(get_current_user),
 ):
     """
-    Return per-course enrollment counts.
+    Returns high-level stats for the dashboard.
 
-    Response example:
-    [
-      {
-        "course_id": 1,
-        "course_code": "CS101",
-        "course_title": "Intro to CS",
-        "department": "CS",
-        "enrollment_count": 42
-      },
-      ...
-    ]
+    - total_students
+    - total_courses
+    - total_teachers
+    - total_enrollments
+    - avg_gpa (over all students with non-null gpa)
     """
 
-    q = (
+    total_students = db.query(func.count(Student.id)).scalar() or 0
+    total_courses = db.query(func.count(Course.id)).scalar() or 0
+    total_teachers = db.query(func.count(Teacher.id)).scalar() or 0
+    total_enrollments = db.query(func.count(Enrollment.id)).scalar() or 0
+
+    avg_gpa = db.query(func.avg(Student.gpa)).scalar()
+    avg_gpa = float(avg_gpa) if avg_gpa is not None else None
+
+    return {
+        "total_students": total_students,
+        "total_courses": total_courses,
+        "total_teachers": total_teachers,
+        "total_enrollments": total_enrollments,
+        "avg_gpa": avg_gpa,
+    }
+
+
+@router.get("/course-stats")
+def get_course_stats(
+    db: Session = Depends(get_db_connection),
+    current_user=Depends(get_current_user),
+):
+    """
+    Per-course stats:
+
+    - id
+    - code
+    - title
+    - total_enrollments
+    - avg_grade  (over enrollments with non-null grade)
+    - pass_rate  (0..100, % of enrollments with status='passed' if status exists)
+    """
+
+    # LEFT JOIN Course <- Enrollment
+    rows = (
         db.query(
-            Course.id.label("course_id"),
-            Course.code.label("course_code"),
-            Course.title.label("course_title"),
-            Course.department.label("department"),
-            func.count(Enrollment.id).label("enrollment_count"),
+            Course.id.label("id"),
+            Course.code.label("code"),
+            Course.title.label("title"),
+            func.count(Enrollment.id).label("total_enrollments"),
+            func.avg(Enrollment.grade).label("avg_grade"),
+            func.sum(
+                func.case(
+                    (
+                        (Enrollment.status == "passed"),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("passed_count"),
         )
         .outerjoin(Enrollment, Enrollment.course_id == Course.id)
-        .group_by(Course.id, Course.code, Course.title, Course.department)
-        .order_by(func.count(Enrollment.id).desc())
-        .offset(skip)
-        .limit(limit)
+        .group_by(Course.id, Course.code, Course.title)
+        .order_by(Course.code)
+        .all()
     )
 
-    rows = q.all()
-    return [
-        {
-            "course_id": r.course_id,
-            "course_code": r.course_code,
-            "course_title": r.course_title,
-            "department": r.department,
-            "enrollment_count": int(r.enrollment_count),
-        }
-        for r in rows
-    ]
+    results = []
+    for row in rows:
+        total_enrollments = int(row.total_enrollments or 0)
+        avg_grade = float(row.avg_grade) if row.avg_grade is not None else None
+
+        passed_count = int(row.passed_count or 0)
+        if total_enrollments > 0:
+            pass_rate = round((passed_count / total_enrollments) * 100, 2)
+        else:
+            pass_rate = None
+
+        results.append(
+            {
+                "id": row.id,
+                "code": row.code,
+                "title": row.title,
+                "total_enrollments": total_enrollments,
+                "avg_grade": avg_grade,
+                "pass_rate": pass_rate,  # percentage or None
+            }
+        )
+
+    return results
 
 
-# -------------------------------------------------
-# 2) Departments → GPA summary
-# -------------------------------------------------
-@router.get("/departments/gpa_summary")
-def analytics_department_gpa_summary(
+@router.get("/department-stats")
+def get_department_stats(
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
     """
-    Department-wise GPA summary based on Enrollment.grade.
+    Per-department stats:
 
-    Response example:
-    [
-      {
-        "department": "CS",
-        "student_count": 120,
-        "avg_gpa": 3.12
-      },
-      ...
-    ]
-
-    Note: grade NULL / None values are ignored.
+    - department
+    - total_students
+    - total_courses
+    - avg_gpa
     """
 
-    q = (
+    # From students: number & avg_gpa
+    student_rows = (
         db.query(
             Student.department.label("department"),
-            func.count(func.distinct(Student.id)).label("student_count"),
-            func.avg(Enrollment.grade).label("avg_gpa"),
+            func.count(Student.id).label("total_students"),
+            func.avg(Student.gpa).label("avg_gpa"),
         )
-        .join(Enrollment, Enrollment.student_id == Student.id)
-        .filter(Enrollment.grade.isnot(None))
         .group_by(Student.department)
-        .order_by(Student.department)
+        .all()
     )
 
-    rows = q.all()
-    return [
-        {
-            "department": r.department,
-            "student_count": int(r.student_count),
-            "avg_gpa": float(r.avg_gpa) if r.avg_gpa is not None else None,
-        }
-        for r in rows
-    ]
-
-
-# -------------------------------------------------
-# 3) Teachers → course load + total enrollments
-# -------------------------------------------------
-@router.get("/teachers/course_load")
-def analytics_teacher_course_load(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
-    db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),
-):
-    """
-    Teacher-wise course load and total enrollments.
-
-    Response example:
-    [
-      {
-        "teacher_id": 5,
-        "teacher_name": "Dr. Ahmed",
-        "department": "CS",
-        "course_count": 3,
-        "total_enrollments": 95
-      },
-      ...
-    ]
-    """
-
-    q = (
+    # From courses: number of courses per department
+    course_rows = (
         db.query(
-            Teacher.id.label("teacher_id"),
-            Teacher.name.label("teacher_name"),
-            Teacher.department.label("department"),
-            func.count(func.distinct(Course.id)).label("course_count"),
-            func.count(Enrollment.id).label("total_enrollments"),
+            Course.department.label("department"),
+            func.count(Course.id).label("total_courses"),
         )
-        .outerjoin(Course, Course.teacher_id == Teacher.id)
-        .outerjoin(Enrollment, Enrollment.course_id == Course.id)
-        .group_by(Teacher.id, Teacher.name, Teacher.department)
-        .order_by(func.count(Enrollment.id).desc())
-        .offset(skip)
-        .limit(limit)
+        .group_by(Course.department)
+        .all()
     )
 
-    rows = q.all()
-    return [
-        {
-            "teacher_id": r.teacher_id,
-            "teacher_name": r.teacher_name,
-            "department": r.department,
-            "course_count": int(r.course_count),
-            "total_enrollments": int(r.total_enrollments),
-        }
-        for r in rows
-    ]
+    # Merge by department
+    stats = {}
+
+    for row in student_rows:
+        dept = row.department
+        if not dept:
+            continue
+
+        stats.setdefault(dept, {})
+        stats[dept]["department"] = dept
+        stats[dept]["total_students"] = int(row.total_students or 0)
+        stats[dept]["avg_gpa"] = (
+            float(row.avg_gpa) if row.avg_gpa is not None else None
+        )
+
+    for row in course_rows:
+        dept = row.department
+        if not dept:
+            continue
+
+        stats.setdefault(dept, {})
+        stats[dept]["department"] = dept
+        stats[dept]["total_courses"] = int(row.total_courses or 0)
+
+    # fill defaults
+    results = []
+    for dept, info in stats.items():
+        results.append(
+            {
+                "department": dept,
+                "total_students": info.get("total_students", 0),
+                "total_courses": info.get("total_courses", 0),
+                "avg_gpa": info.get("avg_gpa", None),
+            }
+        )
+
+    # Sort by department name for stable output
+    results.sort(key=lambda x: x["department"])
+
+    return results

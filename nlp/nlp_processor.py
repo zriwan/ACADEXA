@@ -1,5 +1,5 @@
 # nlp/nlp_processor.py
-# Day 12: Rule-based NLP Processor for ACADEXA
+# Rule-based NLP Processor for ACADEXA
 
 from typing import Dict, Any
 import re
@@ -10,8 +10,16 @@ from .intents import match_intent
 
 
 class ParseResult(BaseModel):
-    intent: str
-    slots: Dict[str, Any]
+  intent: str
+  slots: Dict[str, Any]
+
+  # ✅ Allow dict-style access: parsed["intent"], parsed["slots"]
+  def __getitem__(self, key: str) -> Any:
+      return getattr(self, key)
+
+  # Optional but handy if anything calls parsed.get("intent")
+  def get(self, key: str, default=None) -> Any:
+      return getattr(self, key, default)
 
 
 def _normalize(text: str) -> str:
@@ -27,15 +35,14 @@ def _normalize(text: str) -> str:
     text = text.lower().strip()
 
     # remove punctuation except hyphens (keep course codes like cs-101)
-    # [^\w\s\-] = anything that's NOT (word char, whitespace, or '-')
-    text = re.sub(r"[^\w\s\-]", " ", text)
+    # keep only lowercase letters, digits, whitespace and hyphen
+    text = re.sub(r"[^a-z0-9\s\-]", " ", text)
 
     # collapse runs of whitespace into a single space
     text = re.sub(r"\s+", " ", text)
 
     # final cleanup: remove leading/trailing spaces
-    # and normalize any weird spacing edge-cases
-    text = " ".join(text.split())
+    text = text.strip()
 
     return text
 
@@ -43,7 +50,9 @@ def _normalize(text: str) -> str:
 def parse_command(text: str) -> ParseResult:
     """
     Convert raw text into a canonical intent + slots dict.
-    If no intent matches, returns intent='unknown' with empty slots.
+
+    If no intent matches, returns:
+        ParseResult(intent="unknown", slots={})
     """
     norm = _normalize(text)
     matched = match_intent(norm)
@@ -51,21 +60,3 @@ def parse_command(text: str) -> ParseResult:
         return ParseResult(**matched)
 
     return ParseResult(intent="unknown", slots={})
-
-
-# Optional: tiny demo
-if __name__ == "__main__":
-    samples = [
-        "Add student Ali roll 125",
-        "Show result of student 125",
-        "Delete student 7",
-        "List all students in course cs101",
-        "Assign teacher Ahmed to course AI-101!!!",
-        "How many teachers",
-        "Update student 33 name to Hamza, Khan",
-        "Create course Data Mining",
-        "Remove course CS-999",
-        "what is this command",  # unknown
-    ]
-    for s in samples:
-        print(s, "->", parse_command(s).model_dump())

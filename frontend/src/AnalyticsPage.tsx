@@ -3,233 +3,305 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api/client";
 
-type CourseEnrollmentStat = {
-  course_id: number;
-  course_code: string;
-  course_title: string;
-  enrollment_count: number;
+type AnalyticsSummary = {
+  total_students: number;
+  total_courses: number;
+  total_teachers: number;
+  total_enrollments: number;
+  avg_gpa: number | null;
 };
 
-type DeptGpaStat = {
+type CourseStat = {
+  id: number;
+  code: string | null;
+  title: string | null;
+  total_enrollments: number;
+  avg_grade: number | null;
+  pass_rate: number | null; // percentage
+};
+
+type DepartmentStat = {
   department: string;
-  avg_gpa: number;
-  student_count: number;
-};
-
-type TeacherLoadStat = {
-  teacher_id: number;
-  teacher_name: string;
-  course_count: number;
+  total_students: number;
+  total_courses: number;
+  avg_gpa: number | null;
 };
 
 const AnalyticsPage: React.FC = () => {
-  const [courseStats, setCourseStats] = useState<CourseEnrollmentStat[]>([]);
-  const [deptStats, setDeptStats] = useState<DeptGpaStat[]>([]);
-  const [teacherStats, setTeacherStats] = useState<TeacherLoadStat[]>([]);
+  const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
+  const [courseStats, setCourseStats] = useState<CourseStat[]>([]);
+  const [departmentStats, setDepartmentStats] = useState<DepartmentStat[]>([]);
+
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const fetchAnalytics = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const [coursesRes, deptRes, teachersRes] = await Promise.all([
-        api.get<CourseEnrollmentStat[]>("/analytics/courses/enrollment_counts"),
-        api.get<DeptGpaStat[]>("/analytics/departments/gpa_summary"),
-        api.get<TeacherLoadStat[]>("/analytics/teachers/course_load"),
-      ]);
-
-      setCourseStats(coursesRes.data || []);
-      setDeptStats(deptRes.data || []);
-      setTeacherStats(teachersRes.data || []);
-    } catch (err: any) {
-      console.error(err);
-      setError(
-        "Failed to load analytics. Make sure you are logged in as admin and backend is running."
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
 
   useEffect(() => {
-    fetchAnalytics();
+    const fetchAll = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // 3 parallel requests
+        const [summaryRes, courseRes, deptRes] = await Promise.all([
+          api.get("/analytics/summary"),
+          api.get("/analytics/course-stats"),
+          api.get("/analytics/department-stats"),
+        ]);
+
+        setSummary(summaryRes.data);
+        setCourseStats(courseRes.data);
+        setDepartmentStats(deptRes.data);
+      } catch (err: any) {
+        console.error(err);
+
+        if (err.response) {
+          const status = err.response.status;
+          const data = err.response.data;
+
+          if (status === 401) {
+            setError(
+              "Not authenticated. Please login first on the Students tab."
+            );
+          } else {
+            setError(
+              `Error ${status}: ` +
+                (typeof data === "string" ? data : JSON.stringify(data))
+            );
+          }
+        } else if (err.request) {
+          setError(
+            "No response from server. Is backend running on 127.0.0.1:8000?"
+          );
+        } else {
+          setError("Unexpected error: " + err.message);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAll();
   }, []);
+
+  const renderSummaryCards = () => {
+    if (!summary) return null;
+
+    const items = [
+      {
+        label: "Total Students",
+        value: summary.total_students,
+        subtitle: "Active in the system",
+      },
+      {
+        label: "Total Courses",
+        value: summary.total_courses,
+        subtitle: "Offered courses",
+      },
+      {
+        label: "Total Teachers",
+        value: summary.total_teachers,
+        subtitle: "Faculty members",
+      },
+      {
+        label: "Total Enrollments",
+        value: summary.total_enrollments,
+        subtitle: "Student–course enrollments",
+      },
+      {
+        label: "Average GPA",
+        value:
+          summary.avg_gpa !== null ? summary.avg_gpa.toFixed(2) : "N/A",
+        subtitle: "Across all students with GPA",
+      },
+    ];
+
+    return (
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: "1rem",
+          marginTop: "1rem",
+        }}
+      >
+        {items.map((item) => (
+          <section className="card" key={item.label}>
+            <div className="card-body">
+              <p
+                style={{
+                  fontSize: "0.8rem",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.05em",
+                  color: "#6b7280",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                {item.label}
+              </p>
+              <p
+                style={{
+                  fontSize: "1.8rem",
+                  fontWeight: 600,
+                }}
+              >
+                {item.value}
+              </p>
+              <p
+                style={{
+                  fontSize: "0.8rem",
+                  color: "#9ca3af",
+                  marginTop: "0.25rem",
+                }}
+              >
+                {item.subtitle}
+              </p>
+            </div>
+          </section>
+        ))}
+      </div>
+    );
+  };
+
+  const renderCourseStatsTable = () => {
+    if (!courseStats || courseStats.length === 0) {
+      return <p>No course statistics available.</p>;
+    }
+
+    return (
+      <div style={{ overflowX: "auto" }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Title</th>
+              <th>Enrollments</th>
+              <th>Avg Grade</th>
+              <th>Pass Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {courseStats.map((c) => (
+              <tr key={c.id}>
+                <td>{c.code ?? "-"}</td>
+                <td>{c.title ?? "-"}</td>
+                <td>{c.total_enrollments}</td>
+                <td>
+                  {c.avg_grade !== null ? c.avg_grade.toFixed(2) : "N/A"}
+                </td>
+                <td>
+                  {c.pass_rate !== null ? `${c.pass_rate.toFixed(2)}%` : "N/A"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderDepartmentStatsTable = () => {
+    if (!departmentStats || departmentStats.length === 0) {
+      return <p>No department statistics available.</p>;
+    }
+
+    return (
+      <div style={{ overflowX: "auto" }}>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Department</th>
+              <th>Total Students</th>
+              <th>Total Courses</th>
+              <th>Avg GPA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {departmentStats.map((d) => (
+              <tr key={d.department}>
+                <td>{d.department}</td>
+                <td>{d.total_students}</td>
+                <td>{d.total_courses}</td>
+                <td>
+                  {d.avg_gpa !== null ? d.avg_gpa.toFixed(2) : "N/A"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
 
   return (
     <div>
-      <h1 className="page-title">Analytics</h1>
+      <h1 className="page-title">Analytics Overview</h1>
       <p className="page-subtitle">
-        High-level overview of course enrollments, department GPA and teacher
-        load.
+        High-level snapshot of students, courses, teachers and enrollments.
       </p>
 
-      {/* Refresh + error bar */}
-      <div
-        style={{
-          display: "flex",
-          gap: "0.5rem",
-          alignItems: "center",
-          marginBottom: "0.75rem",
-          flexWrap: "wrap",
-        }}
-      >
-        <button
-          className="btn btn-secondary"
-          onClick={fetchAnalytics}
-          disabled={loading}
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
-        {error && <div className="alert alert-error">{error}</div>}
-      </div>
-
-      {/* Summary cards */}
-      <section
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: "1rem",
-          marginBottom: "1rem",
-        }}
-      >
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">Total Courses</h2>
-          </div>
-          <div className="card-body">
-            <p style={{ fontSize: "1.5rem", fontWeight: 600 }}>
-              {courseStats.length}
-            </p>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">Departments</h2>
-          </div>
-          <div className="card-body">
-            <p style={{ fontSize: "1.5rem", fontWeight: 600 }}>
-              {deptStats.length}
-            </p>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-header">
-            <h2 className="card-title">Teachers with Courses</h2>
-          </div>
-          <div className="card-body">
-            <p style={{ fontSize: "1.5rem", fontWeight: 600 }}>
-              {teacherStats.length}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {loading && <p>Loading analytics...</p>}
-
-      {/* Course enrollments */}
       <section className="card">
         <div className="card-header">
-          <h2 className="card-title">Course Enrollment Counts</h2>
+          <h2 className="card-title">Summary</h2>
         </div>
         <div className="card-body">
-          {courseStats.length === 0 && !loading && (
-            <p>
-              No course enrollment data yet. Try creating courses and enrolling
-              students first.
-            </p>
+          {loading && <p>Loading analytics...</p>}
+          {error && <div className="alert alert-error">{error}</div>}
+
+          {!loading && !error && !summary && (
+            <p>No analytics data available.</p>
           )}
-          {courseStats.length > 0 && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Course</th>
-                  <th>Enrollments</th>
-                </tr>
-              </thead>
-              <tbody>
-                {courseStats.map((c) => (
-                  <tr key={c.course_id}>
-                    <td>
-                      {c.course_code} — {c.course_title}
-                    </td>
-                    <td>{c.enrollment_count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+
+          {!loading && !error && summary && renderSummaryCards()}
+
+          {/* Raw JSON for summary (optional debug) */}
+          {summary && (
+            <>
+              <h3
+                style={{
+                  marginTop: "1rem",
+                  marginBottom: "0.4rem",
+                  fontSize: "0.9rem",
+                }}
+              >
+                Summary JSON
+              </h3>
+              <pre
+                style={{
+                  background: "#0b1120",
+                  color: "#e5e7eb",
+                  padding: "0.75rem",
+                  borderRadius: 8,
+                  fontSize: "0.8rem",
+                  overflowX: "auto",
+                  maxHeight: 300,
+                }}
+              >
+                {JSON.stringify(summary, null, 2)}
+              </pre>
+            </>
           )}
         </div>
       </section>
 
-      {/* Department GPA */}
+      {/* Course-wise stats */}
       <section className="card">
         <div className="card-header">
-          <h2 className="card-title">Department GPA Summary</h2>
+          <h2 className="card-title">Course Statistics</h2>
         </div>
         <div className="card-body">
-          {deptStats.length === 0 && !loading && (
-            <p>
-              No GPA data available. Once students have GPAs, department
-              summaries will appear here.
-            </p>
-          )}
-          {deptStats.length > 0 && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Department</th>
-                  <th>Average GPA</th>
-                  <th>Students</th>
-                </tr>
-              </thead>
-              <tbody>
-                {deptStats.map((d) => (
-                  <tr key={d.department}>
-                    <td>{d.department}</td>
-                    <td>{d.avg_gpa.toFixed(2)}</td>
-                    <td>{d.student_count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          {!loading && !error && renderCourseStatsTable()}
+          {loading && <p>Loading course statistics...</p>}
         </div>
       </section>
 
-      {/* Teacher load */}
+      {/* Department-wise stats */}
       <section className="card">
         <div className="card-header">
-          <h2 className="card-title">Teacher Course Load</h2>
+          <h2 className="card-title">Department Statistics</h2>
         </div>
         <div className="card-body">
-          {teacherStats.length === 0 && !loading && (
-            <p>
-              No teacher load data yet. Assign teachers to courses to see their
-              course load here.
-            </p>
-          )}
-          {teacherStats.length > 0 && (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Teacher</th>
-                  <th>Course count</th>
-                </tr>
-              </thead>
-              <tbody>
-                {teacherStats.map((t) => (
-                  <tr key={t.teacher_id}>
-                    <td>{t.teacher_name}</td>
-                    <td>{t.course_count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          {!loading && !error && renderDepartmentStatsTable()}
+          {loading && <p>Loading department statistics...</p>}
         </div>
       </section>
     </div>

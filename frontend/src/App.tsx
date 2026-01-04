@@ -6,6 +6,8 @@ import CoursesPage from "./CoursesPage";
 import EnrollmentsPage from "./EnrollmentsPage";
 import VoiceConsolePage from "./VoiceConsolePage";
 import AnalyticsPage from "./AnalyticsPage";
+// ❌ React Router yahan zaroori nahi, is liye hata diya
+// import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 function App() {
   const [tab, setTab] = useState<
@@ -49,9 +51,7 @@ function App() {
           </button>
           <button
             onClick={() => setTab("analytics")}
-            className={
-              "nav-button" + (tab === "analytics" ? " active" : "")
-            }
+            className={"nav-button" + (tab === "analytics" ? " active" : "")}
           >
             Analytics
           </button>

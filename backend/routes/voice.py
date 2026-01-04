@@ -24,8 +24,15 @@ def handle_command(
 ):
     """
     Bridge: text -> NLP -> intent -> (optional) DB action.
-    - Always returns: raw_text + parsed (intent, slots)
-    - For some intents we also return 'results' + 'results_type'.
+
+    Always returns at least:
+      - raw_text: original text
+      - parsed:   { intent, slots }
+
+    For list-style intents, we also return:
+      - info:         human-friendly message
+      - results_type: one of "students" | "courses" | "teachers" | "enrollments"
+      - results:      array of objects
     """
     parsed = parse_command(payload.text)
 
@@ -38,22 +45,49 @@ def handle_command(
     slots = parsed.slots or {}
 
     # -----------------------
+    # 0) unknown intent
+    # -----------------------
+    if intent == "unknown":
+        # Day 6 requirement: readable message for unknown commands
+        return {
+            **base,
+            "info": (
+                "I couldn't understand this command. "
+                "Try commands like 'list students' or 'list courses'."
+            ),
+            "results_type": None,
+            "results": [],
+        }
+
+    # -----------------------
     # 1) list_students
     # -----------------------
     if intent == "list_students":
         course_code = slots.get("course")
 
-        if course_code:
-            q = (
-                db.query(Student)
-                .join(Enrollment, Enrollment.student_id == Student.id)
-                .join(Course, Course.id == Enrollment.course_id)
-                .filter(Course.code.ilike(str(course_code)))
-            )
-        else:
-            q = db.query(Student)
+        query = db.query(Student)
 
-        students = q.order_by(Student.id).all()
+        if course_code:
+            # join with Enrollment + Course to filter students by course code
+            query = (
+                query.join(Enrollment, Enrollment.student_id == Student.id)
+                .join(Course, Course.id == Enrollment.course_id)
+                .filter(Course.code.ilike(course_code))
+            )
+
+        students = query.order_by(Student.id).all()
+
+        if not students:
+            if course_code:
+                info = f"No students found in course {course_code}."
+            else:
+                info = "No students matched this query."
+            return {
+                **base,
+                "info": info,
+                "results_type": "students",
+                "results": [],
+            }
 
         results = [
             {
@@ -65,10 +99,15 @@ def handle_command(
             for s in students
         ]
 
+        info = (
+            f"Found {len(results)} student(s) in course {course_code}."
+            if course_code
+            else f"Found {len(results)} student(s)."
+        )
+
         return {
             **base,
-            "info": "Listed students"
-            + (f" in course {course_code}" if course_code else ""),
+            "info": info,
             "results_type": "students",
             "results": results,
         }
@@ -77,19 +116,52 @@ def handle_command(
     # 2) list_courses
     # -----------------------
     if intent == "list_courses":
-        courses = db.query(Course).order_by(Course.id).all()
+        query = db.query(Course)
+
+        department = slots.get("department")
+        teacher_id = slots.get("teacher_id")
+
+        if department:
+            query = query.filter(Course.department.ilike(department))
+        if teacher_id is not None:
+            query = query.filter(Course.teacher_id == teacher_id)
+
+        courses = query.order_by(Course.id).all()
+
+        if not courses:
+            if department:
+                info = f"No courses found in department {department}."
+            elif teacher_id is not None:
+                info = f"No courses found for teacher {teacher_id}."
+            else:
+                info = "No courses found."
+            return {
+                **base,
+                "info": info,
+                "results_type": "courses",
+                "results": [],
+            }
+
         results = [
             {
                 "id": c.id,
                 "title": c.title,
                 "code": c.code,
                 "credit_hours": c.credit_hours,
+                # extra fields for debugging if you want
+                "department": getattr(c, "department", None),
+                "teacher_id": getattr(c, "teacher_id", None),
             }
             for c in courses
         ]
+
+        info = f"Found {len(results)} course(s)."
+
+        # Old behavior: "Listed all courses"
+        # Day 6: more informative count
         return {
             **base,
-            "info": "Listed all courses",
+            "info": info,
             "results_type": "courses",
             "results": results,
         }
@@ -99,6 +171,15 @@ def handle_command(
     # -----------------------
     if intent == "list_teachers":
         teachers = db.query(Teacher).order_by(Teacher.id).all()
+
+        if not teachers:
+            return {
+                **base,
+                "info": "No teachers found.",
+                "results_type": "teachers",
+                "results": [],
+            }
+
         results = [
             {
                 "id": t.id,
@@ -109,9 +190,12 @@ def handle_command(
             }
             for t in teachers
         ]
+
+        info = f"Found {len(results)} teacher(s)."
+
         return {
             **base,
-            "info": "Listed all teachers",
+            "info": info,
             "results_type": "teachers",
             "results": results,
         }
@@ -119,24 +203,21 @@ def handle_command(
     # -----------------------
     # 4) list_enrollments_for_student
     # -----------------------
-    # We support multiple possible intent names, depending on NLP rules
-    if intent in ("list_enrollments_for_student", "list_enrollments_by_student"):
-        # Try to get student id from slots
-        raw_sid = (
-            slots.get("student_id")
-            or slots.get("student")
-            or slots.get("id")
-        )
+    if intent == "list_enrollments_for_student":
+        raw_sid = slots.get("student_id")
 
         try:
             student_id = int(raw_sid) if raw_sid is not None else None
-        except ValueError:
+        except (TypeError, ValueError):
             student_id = None
 
         if not student_id:
+            # Day 6: clear message for bad / missing student id
             return {
                 **base,
-                "info": "Intent recognized but no student id found in command.",
+                "info": "Intent recognized but no valid student id found in command.",
+                "results_type": "enrollments",
+                "results": [],
             }
 
         q = (
@@ -148,6 +229,15 @@ def handle_command(
         )
 
         rows = q.all()
+
+        if not rows:
+            return {
+                **base,
+                "info": f"No enrollments found for student {student_id}.",
+                "results_type": "enrollments",
+                "results": [],
+            }
+
         results = []
         for en, stu, co in rows:
             results.append(
@@ -164,9 +254,11 @@ def handle_command(
                 }
             )
 
+        info = f"Found {len(results)} enrollment(s) for student {student_id}."
+
         return {
             **base,
-            "info": f"Listed enrollments for student {student_id}",
+            "info": info,
             "results_type": "enrollments",
             "results": results,
         }
@@ -174,5 +266,10 @@ def handle_command(
     # ---- Fallback: known intent but not implemented above ----
     return {
         **base,
-        "info": "NLP parsed your command, but no concrete action is implemented for this intent yet.",
+        "info": (
+            "NLP parsed your command, but no concrete action is implemented "
+            "for this intent yet."
+        ),
+        "results_type": None,
+        "results": [],
     }
