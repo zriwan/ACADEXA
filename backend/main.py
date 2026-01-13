@@ -12,8 +12,10 @@ from backend.routes.enrollments import router as enrollments_router
 from backend.routes.students import router as students_router
 from backend.routes.teachers import router as teachers_router
 from backend.routes.analytics import router as analytics_router
-
+from backend.routes.admin import router as admin_router
 from backend.routes.voice import router as voice_router
+
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
@@ -34,8 +36,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # ===== SHUTDOWN =====
-    # If you keep pooled engines or external clients, close them here.
-    # (SQLAlchemy 2.x engine disposes automatically when GC'd, but you can force:)
     try:
         engine.dispose()
         print("🧹 DB engine disposed")
@@ -45,12 +45,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Acadexa Backend", lifespan=lifespan)
 
+# ✅ CORS FIX: Allow your React frontend explicitly (localhost:3000)
+# This avoids browser CORS/preflight issues and supports Authorization headers cleanly.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Routers
 app.include_router(auth_router)
@@ -59,13 +63,8 @@ app.include_router(teachers_router)
 app.include_router(courses_router)
 app.include_router(enrollments_router)
 app.include_router(analytics_router)
-
-
+app.include_router(admin_router)
 app.include_router(voice_router)
-
-
-
-
 
 
 

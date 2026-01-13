@@ -1,26 +1,17 @@
-# tests/test_analytics.py
-
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from tests.utils_auth import get_auth_headers
 
 client = TestClient(app)
 
 
-def _ensure_ok_or_skip(resp):
-    """
-    If analytics is behind auth and returns 401,
-    skip the test instead of failing.
-    """
-    if resp.status_code == 401:
-        pytest.skip("Analytics endpoint requires authentication (401). Skipping test.")
-    assert resp.status_code == 200
-
-
 def test_analytics_summary_shape():
-    resp = client.get("/analytics/summary")
-    _ensure_ok_or_skip(resp)
+    headers = get_auth_headers(client)  # ✅ login -> token -> Authorization header
+
+    resp = client.get("/analytics/summary", headers=headers)
+    assert resp.status_code == 200, resp.text
 
     data = resp.json()
 
@@ -42,3 +33,4 @@ def test_analytics_summary_shape():
 
     # avg_gpa can be None or float
     assert (data["avg_gpa"] is None) or isinstance(data["avg_gpa"], float)
+    

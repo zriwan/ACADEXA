@@ -1,6 +1,6 @@
 // src/AnalyticsPage.tsx
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api/client";
 
 type AnalyticsSummary = {
@@ -17,7 +17,7 @@ type CourseStat = {
   title: string | null;
   total_enrollments: number;
   avg_grade: number | null;
-  pass_rate: number | null; // percentage
+  pass_rate: number | null;
 };
 
 type DepartmentStat = {
@@ -27,6 +27,33 @@ type DepartmentStat = {
   avg_gpa: number | null;
 };
 
+const TOKEN_KEY = "acadexa_token";
+
+function normalizeError(err: any): string {
+  // Axios error shapes:
+  // - err.response => server responded (401/403/500)
+  // - err.request => no response (network/CORS/backend down)
+  // - otherwise => configuration/runtime issue
+  if (err?.response) {
+    const status = err.response.status;
+    const detail =
+      err.response.data?.detail ??
+      (typeof err.response.data === "string"
+        ? err.response.data
+        : JSON.stringify(err.response.data));
+
+    if (status === 401) return "Not authenticated. Please login first.";
+    if (status === 403) return "Forbidden. Your role may not allow analytics access.";
+    return `Analytics failed (HTTP ${status}): ${detail}`;
+  }
+
+  if (err?.request) {
+    return "No response from server. Is backend running on http://127.0.0.1:8000 ?";
+  }
+
+  return `Unexpected error: ${err?.message ?? String(err)}`;
+}
+
 const AnalyticsPage: React.FC = () => {
   const [summary, setSummary] = useState<AnalyticsSummary | null>(null);
   const [courseStats, setCourseStats] = useState<CourseStat[]>([]);
@@ -35,82 +62,94 @@ const AnalyticsPage: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchAll = async () => {
-      try {
-        setLoading(true);
-        setError(null);
+  // ✅ token presence (reads from localStorage)
+  const token = useMemo(() => localStorage.getItem(TOKEN_KEY), []);
 
-        // 3 parallel requests
-        const [summaryRes, courseRes, deptRes] = await Promise.all([
-          api.get("/analytics/summary"),
-          api.get("/analytics/course-stats"),
-          api.get("/analytics/department-stats"),
-        ]);
+  const clearData = () => {
+    setSummary(null);
+    setCourseStats([]);
+    setDepartmentStats([]);
+  };
 
-        setSummary(summaryRes.data);
-        setCourseStats(courseRes.data);
-        setDepartmentStats(deptRes.data);
-      } catch (err: any) {
-        console.error(err);
+  const fetchAll = useCallback(async () => {
+    // Don’t call analytics if not logged in
+    const t = localStorage.getItem(TOKEN_KEY);
+    if (!t) {
+      clearData();
+      setError("Please login first (Students tab) to view analytics.");
+      return;
+    }
 
-        if (err.response) {
-          const status = err.response.status;
-          const data = err.response.data;
+    setLoading(true);
+    setError(null);
 
-          if (status === 401) {
-            setError(
-              "Not authenticated. Please login first on the Students tab."
-            );
-          } else {
-            setError(
-              `Error ${status}: ` +
-                (typeof data === "string" ? data : JSON.stringify(data))
-            );
-          }
-        } else if (err.request) {
-          setError(
-            "No response from server. Is backend running on 127.0.0.1:8000?"
-          );
-        } else {
-          setError("Unexpected error: " + err.message);
-        }
-      } finally {
-        setLoading(false);
+    // ✅ Don’t fail everything if one endpoint fails
+    const results = await Promise.allSettled([
+      api.get("/analytics/summary"),
+      api.get("/analytics/course-stats"),
+      api.get("/analytics/department-stats"),
+    ]);
+
+    try {
+      const [summaryRes, courseRes, deptRes] = results;
+
+      // Summary
+      if (summaryRes.status === "fulfilled") {
+        setSummary(summaryRes.value.data);
+      } else {
+        setSummary(null);
+        setError(normalizeError(summaryRes.reason));
       }
-    };
 
-    fetchAll();
+      // Course stats
+      if (courseRes.status === "fulfilled") {
+        setCourseStats(courseRes.value.data);
+      } else {
+        setCourseStats([]);
+        // If there is already an error, append; else set
+        setError((prev) => prev ?? normalizeError(courseRes.reason));
+      }
+
+      // Department stats
+      if (deptRes.status === "fulfilled") {
+        setDepartmentStats(deptRes.value.data);
+      } else {
+        setDepartmentStats([]);
+        setError((prev) => prev ?? normalizeError(deptRes.reason));
+      }
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  // ✅ initial load
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  // ✅ OPTIONAL: auto-refresh analytics after login in another tab/page
+  // This listens for localStorage changes (login stores token)
+  useEffect(() => {
+  const onAuthChanged = () => {
+    fetchAll(); // refetch analytics immediately after login/logout
+  };
+
+  window.addEventListener("acadexa-auth-changed", onAuthChanged);
+  return () => window.removeEventListener("acadexa-auth-changed", onAuthChanged);
+}, [fetchAll]);
+
 
   const renderSummaryCards = () => {
     if (!summary) return null;
 
     const items = [
-      {
-        label: "Total Students",
-        value: summary.total_students,
-        subtitle: "Active in the system",
-      },
-      {
-        label: "Total Courses",
-        value: summary.total_courses,
-        subtitle: "Offered courses",
-      },
-      {
-        label: "Total Teachers",
-        value: summary.total_teachers,
-        subtitle: "Faculty members",
-      },
-      {
-        label: "Total Enrollments",
-        value: summary.total_enrollments,
-        subtitle: "Student–course enrollments",
-      },
+      { label: "Total Students", value: summary.total_students, subtitle: "Active in the system" },
+      { label: "Total Courses", value: summary.total_courses, subtitle: "Offered courses" },
+      { label: "Total Teachers", value: summary.total_teachers, subtitle: "Faculty members" },
+      { label: "Total Enrollments", value: summary.total_enrollments, subtitle: "Student–course enrollments" },
       {
         label: "Average GPA",
-        value:
-          summary.avg_gpa !== null ? summary.avg_gpa.toFixed(2) : "N/A",
+        value: summary.avg_gpa !== null ? summary.avg_gpa.toFixed(2) : "N/A",
         subtitle: "Across all students with GPA",
       },
     ];
@@ -138,21 +177,8 @@ const AnalyticsPage: React.FC = () => {
               >
                 {item.label}
               </p>
-              <p
-                style={{
-                  fontSize: "1.8rem",
-                  fontWeight: 600,
-                }}
-              >
-                {item.value}
-              </p>
-              <p
-                style={{
-                  fontSize: "0.8rem",
-                  color: "#9ca3af",
-                  marginTop: "0.25rem",
-                }}
-              >
+              <p style={{ fontSize: "1.8rem", fontWeight: 600 }}>{item.value}</p>
+              <p style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "0.25rem" }}>
                 {item.subtitle}
               </p>
             </div>
@@ -185,12 +211,8 @@ const AnalyticsPage: React.FC = () => {
                 <td>{c.code ?? "-"}</td>
                 <td>{c.title ?? "-"}</td>
                 <td>{c.total_enrollments}</td>
-                <td>
-                  {c.avg_grade !== null ? c.avg_grade.toFixed(2) : "N/A"}
-                </td>
-                <td>
-                  {c.pass_rate !== null ? `${c.pass_rate.toFixed(2)}%` : "N/A"}
-                </td>
+                <td>{c.avg_grade !== null ? Number(c.avg_grade).toFixed(2) : "N/A"}</td>
+                <td>{c.pass_rate !== null ? `${Number(c.pass_rate).toFixed(2)}%` : "N/A"}</td>
               </tr>
             ))}
           </tbody>
@@ -221,9 +243,7 @@ const AnalyticsPage: React.FC = () => {
                 <td>{d.department}</td>
                 <td>{d.total_students}</td>
                 <td>{d.total_courses}</td>
-                <td>
-                  {d.avg_gpa !== null ? d.avg_gpa.toFixed(2) : "N/A"}
-                </td>
+                <td>{d.avg_gpa !== null ? Number(d.avg_gpa).toFixed(2) : "N/A"}</td>
               </tr>
             ))}
           </tbody>
@@ -240,68 +260,51 @@ const AnalyticsPage: React.FC = () => {
       </p>
 
       <section className="card">
-        <div className="card-header">
+        <div className="card-header" style={{ display: "flex", justifyContent: "space-between" }}>
           <h2 className="card-title">Summary</h2>
+          <button className="btn btn-secondary" onClick={fetchAll} disabled={loading}>
+            Retry
+          </button>
         </div>
+
         <div className="card-body">
           {loading && <p>Loading analytics...</p>}
-          {error && <div className="alert alert-error">{error}</div>}
 
-          {!loading && !error && !summary && (
-            <p>No analytics data available.</p>
+          {!loading && !token && (
+            <div className="alert alert-error">
+              Please login first (Students tab) to view analytics.
+            </div>
           )}
+
+          {error && <div className="alert alert-error">{error}</div>}
 
           {!loading && !error && summary && renderSummaryCards()}
 
-          {/* Raw JSON for summary (optional debug) */}
-          {summary && (
-            <>
-              <h3
-                style={{
-                  marginTop: "1rem",
-                  marginBottom: "0.4rem",
-                  fontSize: "0.9rem",
-                }}
-              >
-                Summary JSON
-              </h3>
-              <pre
-                style={{
-                  background: "#0b1120",
-                  color: "#e5e7eb",
-                  padding: "0.75rem",
-                  borderRadius: 8,
-                  fontSize: "0.8rem",
-                  overflowX: "auto",
-                  maxHeight: 300,
-                }}
-              >
-                {JSON.stringify(summary, null, 2)}
-              </pre>
-            </>
+          {!loading && !error && !summary && token && (
+            <p>No analytics data available.</p>
           )}
         </div>
       </section>
 
-      {/* Course-wise stats */}
       <section className="card">
         <div className="card-header">
           <h2 className="card-title">Course Statistics</h2>
         </div>
         <div className="card-body">
-          {!loading && !error && renderCourseStatsTable()}
           {loading && <p>Loading course statistics...</p>}
+          {!loading && !error && renderCourseStatsTable()}
+          {!loading && error && <p>Course stats unavailable due to error.</p>}
         </div>
       </section>
 
-      {/* Department-wise stats */}
       <section className="card">
         <div className="card-header">
           <h2 className="card-title">Department Statistics</h2>
         </div>
         <div className="card-body">
-          {!loading && !error && renderDepartmentStatsTable()}
           {loading && <p>Loading department statistics...</p>}
+          {!loading && !error && renderDepartmentStatsTable()}
+          {!loading && error && <p>Department stats unavailable due to error.</p>}
         </div>
       </section>
     </div>

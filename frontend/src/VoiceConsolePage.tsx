@@ -1,17 +1,129 @@
 // src/VoiceConsolePage.tsx
 
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/client";
+
+type SpeechRecognitionType = any;
 
 const VoiceConsolePage: React.FC = () => {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // voice states
+  const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState(true);
+
   const [error, setError] = useState<string | null>(null);
   const [responseJson, setResponseJson] = useState<any | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!text.trim()) return;
+  const recognitionRef = useRef<SpeechRecognitionType | null>(null);
+
+  // Detect SpeechRecognition support (Chrome/Edge)
+  const SpeechRecognitionCtor = useMemo(() => {
+    const w: any = window;
+    return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+  }, []);
+
+  useEffect(() => {
+    if (!SpeechRecognitionCtor) {
+      setVoiceSupported(false);
+      return;
+    }
+
+    const rec = new SpeechRecognitionCtor();
+    rec.continuous = false; // single utterance
+    rec.interimResults = true;
+    rec.lang = "en-US"; // change if you want (e.g. "ur-PK")
+
+    rec.onstart = () => {
+      setListening(true);
+      setError(null);
+    };
+
+    rec.onend = () => {
+      setListening(false);
+    };
+
+    rec.onerror = (e: any) => {
+      setListening(false);
+
+      // common cases: "not-allowed", "service-not-allowed", "no-speech"
+      if (e?.error === "not-allowed" || e?.error === "service-not-allowed") {
+        setError(
+          "Microphone permission denied. Allow mic permission in browser site settings, then reload."
+        );
+      } else if (e?.error === "no-speech") {
+        setError("No speech detected. Try again and speak clearly.");
+      } else {
+        setError(`Speech recognition error: ${e?.error || "unknown"}`);
+      }
+    };
+
+    rec.onresult = (event: any) => {
+      // Build transcript from results
+      let transcript = "";
+      let finalTranscript = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        const chunk = res[0]?.transcript || "";
+        transcript += chunk;
+
+        if (res.isFinal) {
+          finalTranscript += chunk;
+        }
+      }
+
+      const merged = (finalTranscript || transcript).trim();
+      if (merged) {
+        setText(merged);
+      }
+
+      // OPTIONAL: Auto-send after final result
+      // if (finalTranscript.trim()) sendCommand(finalTranscript.trim());
+    };
+
+    recognitionRef.current = rec;
+
+    return () => {
+      try {
+        rec.stop();
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null;
+    };
+  }, [SpeechRecognitionCtor]);
+
+  const startListening = () => {
+    setError(null);
+
+    if (!voiceSupported || !recognitionRef.current) {
+      setError(
+        "Speech recognition is not supported in this browser. Use Chrome/Edge, or type the command."
+      );
+      return;
+    }
+
+    try {
+      recognitionRef.current.start();
+    } catch (e) {
+      // Some browsers throw if start() called twice
+      setError("Could not start microphone. Please try again.");
+    }
+  };
+
+  const stopListening = () => {
+    try {
+      recognitionRef.current?.stop();
+    } catch {
+      // ignore
+    }
+  };
+
+  const sendCommand = async (overrideText?: string) => {
+    const command = (overrideText ?? text).trim();
+    if (!command) return;
 
     try {
       setLoading(true);
@@ -19,10 +131,9 @@ const VoiceConsolePage: React.FC = () => {
       setResponseJson(null);
 
       // backend: POST /voice/command  { "text": "..." }
-      const res = await api.post("/voice/command", { text });
+      const res = await api.post("/voice/command", { text: command });
 
       setResponseJson(res.data);
-      // ✅ success ke baad input clear
       setText("");
     } catch (err: any) {
       console.error(err);
@@ -31,7 +142,6 @@ const VoiceConsolePage: React.FC = () => {
         const status = err.response.status;
         const data = err.response.data;
 
-        // ✅ 401 ke liye friendly message
         if (status === 401) {
           setError("Not authenticated. Please login first on the Students tab.");
         } else {
@@ -52,21 +162,30 @@ const VoiceConsolePage: React.FC = () => {
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    await sendCommand();
+  };
+
+  const handleClear = () => {
+    setText("");
+    setError(null);
+    setResponseJson(null);
+  };
+
   // ------- UI helper: render structured table from results -------
 
-  // 🔹 This now ONLY renders the table when results are non-empty.
   const renderResultsTable = () => {
     if (!responseJson) return null;
 
     const results = responseJson.results;
     const type = responseJson.results_type;
 
-    // Empty-check is now handled in renderResultsSection
     if (!results || !Array.isArray(results) || results.length === 0) {
       return null;
     }
 
-    // Students table
     if (type === "students") {
       return (
         <table className="table">
@@ -92,7 +211,6 @@ const VoiceConsolePage: React.FC = () => {
       );
     }
 
-    // Courses table
     if (type === "courses") {
       return (
         <table className="table">
@@ -118,7 +236,6 @@ const VoiceConsolePage: React.FC = () => {
       );
     }
 
-    // Teachers table
     if (type === "teachers") {
       return (
         <table className="table">
@@ -146,7 +263,6 @@ const VoiceConsolePage: React.FC = () => {
       );
     }
 
-    // Enrollments table
     if (type === "enrollments") {
       return (
         <table className="table">
@@ -184,7 +300,6 @@ const VoiceConsolePage: React.FC = () => {
       );
     }
 
-    // Unknown type: just show JSON of results
     return (
       <pre
         style={{
@@ -201,16 +316,13 @@ const VoiceConsolePage: React.FC = () => {
     );
   };
 
-  // 🔹 New wrapper: handles empty results vs unknown vs table
   const renderResultsSection = () => {
     if (!responseJson) return null;
 
     const results = responseJson.results;
     const intent = responseJson.parsed?.intent || "unknown";
 
-    // Empty or missing results
     if (!results || !Array.isArray(results) || results.length === 0) {
-      // Valid intent but no records → show friendly message
       if (intent !== "unknown") {
         return (
           <p className="mt-4 text-sm text-gray-500">
@@ -218,53 +330,78 @@ const VoiceConsolePage: React.FC = () => {
           </p>
         );
       }
-      // Unknown intent: we already show the red hint under Info
       return null;
     }
 
-    // Normal case – show table
     return <div className="mt-4">{renderResultsTable()}</div>;
   };
 
   return (
     <div>
-      <h1 className="page-title">AI Command Console</h1>
+      <h1 className="page-title">Command</h1>
       <p className="page-subtitle">
-        Type natural language commands like{" "}
-        <span className="badge">"list students"</span>,{" "}
-        <span className="badge">"list courses"</span>,{" "}
-        <span className="badge">"list teachers"</span>,{" "}
-        <span className="badge">"list enrollments for student 3"</span>.
+        Type or speak a command. The system will parse intent and return matching
+        results.
       </p>
 
       {/* Command input card */}
       <section className="card">
-        <div className="card-header">
-          <h2 className="card-title">Enter Command</h2>
+        <div className="card-header" style={{ display: "flex", gap: "0.5rem", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 className="card-title">Command Console</h2>
+
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleClear}
+              disabled={loading}
+            >
+              Clear
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={listening ? stopListening : startListening}
+              disabled={loading || !voiceSupported}
+              title={!voiceSupported ? "Use Chrome/Edge for mic" : ""}
+            >
+              {listening ? "Stop Mic" : "Use Mic"}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => sendCommand()}
+              disabled={loading || listening || !text.trim()}
+            >
+              {loading ? "Sending..." : "Send"}
+            </button>
+          </div>
         </div>
+
         <div className="card-body">
           <form onSubmit={handleSubmit}>
             <div className="form-row">
-              <label>Command</label>
+              <label>Command text</label>
               <input
                 placeholder='e.g. "list students in course cs101"'
                 value={text}
                 onChange={(e) => setText(e.target.value)}
               />
             </div>
-
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={loading || !text.trim()}
-            >
-              {loading ? "Running..." : "Run Command"}
-            </button>
           </form>
+
+          {!voiceSupported && (
+            <div className="alert alert-error">
+              Speech recognition is not supported in this browser. Use
+              Chrome/Edge, or type the command.
+            </div>
+          )}
 
           {error && <div className="alert alert-error">{error}</div>}
 
-          {/* ✅ Suggested commands */}
+          {/* Suggested commands */}
           <div style={{ marginTop: "0.75rem", fontSize: "0.85rem" }}>
             <p style={{ marginBottom: "0.25rem" }}>
               <strong>Examples:</strong>
@@ -298,14 +435,12 @@ const VoiceConsolePage: React.FC = () => {
 
           {responseJson && !loading && (
             <>
-              {/* Info line + unknown intent hint */}
               {responseJson.info && (
                 <div style={{ marginBottom: "0.75rem" }}>
                   <p>
                     <strong>Info:</strong> {responseJson.info}
                   </p>
 
-                  {/* 🔹 Unknown intent: show red helper line */}
                   {(responseJson.parsed?.intent || "unknown") === "unknown" && (
                     <p
                       style={{
@@ -321,16 +456,13 @@ const VoiceConsolePage: React.FC = () => {
                 </div>
               )}
 
-              {/* Parsed intent summary */}
               <p style={{ fontSize: "0.85rem", color: "#6b7280" }}>
                 Intent:{" "}
                 <strong>{responseJson.parsed?.intent || "unknown"}</strong>
               </p>
 
-              {/* Structured results (table or "No records found") */}
               {renderResultsSection()}
 
-              {/* Raw JSON debug */}
               <h3
                 style={{
                   marginTop: "1rem",

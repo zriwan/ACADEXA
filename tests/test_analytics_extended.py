@@ -1,26 +1,18 @@
-# tests/test_analytics_extended.py
-
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from tests.utils_auth import get_auth_headers
 
 client = TestClient(app)
 
 
-def _ensure_ok_or_skip(resp):
-    """
-    If analytics is behind auth and returns 401,
-    skip the test instead of failing.
-    """
-    if resp.status_code == 401:
-        pytest.skip("Analytics endpoint requires authentication (401). Skipping test.")
-    assert resp.status_code == 200
-
-
 def test_course_stats_shape():
-    resp = client.get("/analytics/course-stats")
-    _ensure_ok_or_skip(resp)
+    # Authenticate as NORMAL USER
+    headers = get_auth_headers(client, role="user")
+
+    resp = client.get("/analytics/course-stats", headers=headers)
+    assert resp.status_code == 200, resp.text
 
     data = resp.json()
     assert isinstance(data, list)
@@ -48,9 +40,13 @@ def test_course_stats_shape():
     assert (item["pass_rate"] is None) or isinstance(item["pass_rate"], float)
 
 
+
 def test_department_stats_shape():
-    resp = client.get("/analytics/department-stats")
-    _ensure_ok_or_skip(resp)
+    # Authenticate as NORMAL USER
+    headers = get_auth_headers(client, role="user")
+
+    resp = client.get("/analytics/department-stats", headers=headers)
+    assert resp.status_code == 200, resp.text
 
     data = resp.json()
     assert isinstance(data, list)

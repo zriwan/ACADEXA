@@ -1,29 +1,28 @@
 # backend/routes/analytics.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, case
 
 from backend.database import get_db_connection
 from backend.security import get_current_user
 from backend.models import Student, Course, Teacher, Enrollment
 
-router = APIRouter(prefix="/analytics", tags=["Analytics"])
+router = APIRouter(
+    prefix="/analytics",
+    tags=["Analytics"]
+)
 
-
+# =====================================================
+# SUMMARY ANALYTICS
+# =====================================================
 @router.get("/summary")
 def get_analytics_summary(
     db: Session = Depends(get_db_connection),
     current_user=Depends(get_current_user),
 ):
     """
-    Returns high-level stats for the dashboard.
-
-    - total_students
-    - total_courses
-    - total_teachers
-    - total_enrollments
-    - avg_gpa (over all students with non-null gpa)
+    High-level system summary.
     """
 
     total_students = db.query(func.count(Student.id)).scalar() or 0
@@ -31,8 +30,8 @@ def get_analytics_summary(
     total_teachers = db.query(func.count(Teacher.id)).scalar() or 0
     total_enrollments = db.query(func.count(Enrollment.id)).scalar() or 0
 
-    avg_gpa = db.query(func.avg(Student.gpa)).scalar()
-    avg_gpa = float(avg_gpa) if avg_gpa is not None else None
+    avg_gpa_raw = db.query(func.avg(Student.gpa)).scalar()
+    avg_gpa = float(avg_gpa_raw) if avg_gpa_raw is not None else None
 
     return {
         "total_students": total_students,
@@ -43,23 +42,21 @@ def get_analytics_summary(
     }
 
 
+# =====================================================
+# COURSE STATISTICS
+# =====================================================
 @router.get("/course-stats")
 def get_course_stats(
     db: Session = Depends(get_db_connection),
     current_user=Depends(get_current_user),
 ):
     """
-    Per-course stats:
-
-    - id
-    - code
-    - title
-    - total_enrollments
-    - avg_grade  (over enrollments with non-null grade)
-    - pass_rate  (0..100, % of enrollments with status='passed' if status exists)
+    Per-course analytics:
+    - total enrollments
+    - average grade
+    - pass rate
     """
 
-    # LEFT JOIN Course <- Enrollment
     rows = (
         db.query(
             Course.id.label("id"),
@@ -68,12 +65,9 @@ def get_course_stats(
             func.count(Enrollment.id).label("total_enrollments"),
             func.avg(Enrollment.grade).label("avg_grade"),
             func.sum(
-                func.case(
-                    (
-                        (Enrollment.status == "passed"),
-                        1,
-                    ),
-                    else_=0,
+                case(
+                    (Enrollment.status == "passed", 1),
+                    else_=0
                 )
             ).label("passed_count"),
         )
@@ -84,102 +78,110 @@ def get_course_stats(
     )
 
     results = []
-    for row in rows:
-        total_enrollments = int(row.total_enrollments or 0)
-        avg_grade = float(row.avg_grade) if row.avg_grade is not None else None
 
-        passed_count = int(row.passed_count or 0)
-        if total_enrollments > 0:
-            pass_rate = round((passed_count / total_enrollments) * 100, 2)
-        else:
-            pass_rate = None
+    for r in rows:
+        total = int(r.total_enrollments or 0)
+        passed = int(r.passed_count or 0)
 
-        results.append(
-            {
-                "id": row.id,
-                "code": row.code,
-                "title": row.title,
-                "total_enrollments": total_enrollments,
-                "avg_grade": avg_grade,
-                "pass_rate": pass_rate,  # percentage or None
-            }
-        )
+        avg_grade = None
+        if r.avg_grade is not None:
+            try:
+                avg_grade = float(r.avg_grade)
+            except Exception:
+                avg_grade = None
+
+        pass_rate = round((passed / total) * 100, 2) if total > 0 else None
+
+        results.append({
+            "id": r.id,
+            "code": r.code,
+            "title": r.title,
+            "total_enrollments": total,
+            "avg_grade": avg_grade,
+            "pass_rate": pass_rate,
+        })
 
     return results
 
 
+# =====================================================
+# DEPARTMENT STATISTICS (DEFENSIVE & BUG-FREE)
+# =====================================================
 @router.get("/department-stats")
 def get_department_stats(
     db: Session = Depends(get_db_connection),
     current_user=Depends(get_current_user),
 ):
     """
-    Per-department stats:
-
-    - department
-    - total_students
-    - total_courses
-    - avg_gpa
+    Per-department analytics:
+    - total students
+    - total courses
+    - average GPA
     """
 
-    # From students: number & avg_gpa
+    stats: dict[str, dict] = {}
+
+    # -----------------------------
+    # Students per department
+    # -----------------------------
     student_rows = (
         db.query(
             Student.department.label("department"),
             func.count(Student.id).label("total_students"),
             func.avg(Student.gpa).label("avg_gpa"),
         )
+        .filter(Student.department.isnot(None))
         .group_by(Student.department)
         .all()
     )
 
-    # From courses: number of courses per department
-    course_rows = (
-        db.query(
-            Course.department.label("department"),
-            func.count(Course.id).label("total_courses"),
-        )
-        .group_by(Course.department)
-        .all()
-    )
-
-    # Merge by department
-    stats = {}
-
-    for row in student_rows:
-        dept = row.department
+    for r in student_rows:
+        dept = str(r.department).strip()
         if not dept:
             continue
 
-        stats.setdefault(dept, {})
-        stats[dept]["department"] = dept
-        stats[dept]["total_students"] = int(row.total_students or 0)
-        stats[dept]["avg_gpa"] = (
-            float(row.avg_gpa) if row.avg_gpa is not None else None
+        avg_gpa = None
+        if r.avg_gpa is not None:
+            try:
+                avg_gpa = float(r.avg_gpa)
+            except Exception:
+                avg_gpa = None
+
+        stats[dept] = {
+            "department": dept,
+            "total_students": int(r.total_students or 0),
+            "total_courses": 0,
+            "avg_gpa": avg_gpa,
+        }
+
+    # -----------------------------
+    # Courses per department (optional)
+    # -----------------------------
+    if hasattr(Course, "department"):
+        course_rows = (
+            db.query(
+                Course.department.label("department"),
+                func.count(Course.id).label("total_courses"),
+            )
+            .filter(Course.department.isnot(None))
+            .group_by(Course.department)
+            .all()
         )
 
-    for row in course_rows:
-        dept = row.department
-        if not dept:
-            continue
+        for r in course_rows:
+            dept = str(r.department).strip()
+            if not dept:
+                continue
 
-        stats.setdefault(dept, {})
-        stats[dept]["department"] = dept
-        stats[dept]["total_courses"] = int(row.total_courses or 0)
+            stats.setdefault(
+                dept,
+                {
+                    "department": dept,
+                    "total_students": 0,
+                    "total_courses": 0,
+                    "avg_gpa": None,
+                }
+            )
+            stats[dept]["total_courses"] = int(r.total_courses or 0)
 
-    # fill defaults
-    results = []
-    for dept, info in stats.items():
-        results.append(
-            {
-                "department": dept,
-                "total_students": info.get("total_students", 0),
-                "total_courses": info.get("total_courses", 0),
-                "avg_gpa": info.get("avg_gpa", None),
-            }
-        )
-
-    # Sort by department name for stable output
-    results.sort(key=lambda x: x["department"])
-
-    return results
+    return sorted(stats.values(), key=lambda x: x["department"])

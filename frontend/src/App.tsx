@@ -4,10 +4,8 @@ import StudentsPage from "./StudentsPage";
 import TeachersPage from "./TeachersPage";
 import CoursesPage from "./CoursesPage";
 import EnrollmentsPage from "./EnrollmentsPage";
-import VoiceConsolePage from "./VoiceConsolePage";
 import AnalyticsPage from "./AnalyticsPage";
-// ❌ React Router yahan zaroori nahi, is liye hata diya
-// import { BrowserRouter, Routes, Route } from "react-router-dom";
+import VoiceConsolePage from "./VoiceConsolePage";
 
 function App() {
   const [tab, setTab] = useState<

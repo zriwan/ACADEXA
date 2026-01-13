@@ -4,23 +4,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from tests.utils_auth import get_auth_headers
 
 client = TestClient(app)
 
 
-def _ensure_ok_or_skip(resp):
-    """
-    Helper: if the endpoint is auth-protected and returns 401,
-    we skip the test instead of failing it.
-    """
-    if resp.status_code == 401:
-        pytest.skip("Voice endpoint requires authentication (401). Skipping test.")
-    assert resp.status_code == 200
-
-
 def test_voice_unknown_intent():
-    resp = client.post("/voice/command", json={"text": "open the door please"})
-    _ensure_ok_or_skip(resp)
+    headers = get_auth_headers(client, role="user")
+
+    resp = client.post("/voice/command", json={"text": "open the door please"}, headers=headers)
+    assert resp.status_code == 200, resp.text
 
     data = resp.json()
     assert data["parsed"]["intent"] == "unknown"
@@ -31,8 +24,10 @@ def test_voice_unknown_intent():
 
 
 def test_voice_list_courses():
-    resp = client.post("/voice/command", json={"text": "show all courses"})
-    _ensure_ok_or_skip(resp)
+    headers = get_auth_headers(client, role="user")
+
+    resp = client.post("/voice/command", json={"text": "show all courses"}, headers=headers)
+    assert resp.status_code == 200, resp.text
 
     data = resp.json()
     assert data["parsed"]["intent"] == "list_courses"
@@ -42,11 +37,14 @@ def test_voice_list_courses():
 
 
 def test_voice_list_students_in_course():
+    headers = get_auth_headers(client, role="user")
+
     resp = client.post(
         "/voice/command",
         json={"text": "list students in course cs101"},
+        headers=headers,
     )
-    _ensure_ok_or_skip(resp)
+    assert resp.status_code == 200, resp.text
 
     data = resp.json()
     assert data["parsed"]["intent"] == "list_students"
@@ -57,11 +55,14 @@ def test_voice_list_students_in_course():
 
 
 def test_voice_list_enrollments_for_student():
+    headers = get_auth_headers(client, role="user")
+
     resp = client.post(
         "/voice/command",
         json={"text": "show enrollments for student 3"},
+        headers=headers,
     )
-    _ensure_ok_or_skip(resp)
+    assert resp.status_code == 200, resp.text
 
     data = resp.json()
     assert data["parsed"]["intent"] == "list_enrollments_for_student"

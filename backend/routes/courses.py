@@ -3,56 +3,45 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from backend.database import get_db_connection
-from backend.models import Course, Teacher, Student, Enrollment  # adjust if names differ
-from backend.schemas import (
-    CourseCreate,
-    CourseUpdate,
-    CourseResponse,
-)
-
-from ..security import get_current_user, require_admin
+from backend.models import Course, Teacher, Enrollment
+from backend.schemas import CourseCreate, CourseUpdate, CourseResponse
+from backend.security import get_current_user, require_admin
 
 router = APIRouter(prefix="/courses", tags=["Courses"])
 
 
-# ---------------------------
-# CREATE — add course
-# ---------------------------
+# =====================================================
+# CREATE COURSE (ADMIN ONLY)
+# =====================================================
 @router.post("/", response_model=CourseResponse, status_code=status.HTTP_201_CREATED)
 def create_course(
     payload: CourseCreate,
     db: Session = Depends(get_db_connection),
-    _=Depends(require_admin),  # usually admin-only
+    _=Depends(require_admin),
 ):
-    """
-    Create a new course.
-    Expected fields (example): code, title, department, teacher_id, credits, etc.
-    """
-
-    # optional: enforce unique course code
+    # Enforce unique course code
     exists = db.query(Course).filter(Course.code == payload.code).first()
     if exists:
         raise HTTPException(status_code=400, detail="Course code already in use")
 
-    # optional: check teacher exists if teacher_id provided
-    if getattr(payload, "teacher_id", None) is not None:
+    # Validate teacher if provided
+    if payload.teacher_id is not None:
         teacher = db.get(Teacher, payload.teacher_id)
         if not teacher:
             raise HTTPException(status_code=404, detail="Assigned teacher not found")
 
-    c = Course(**payload.model_dump())
-    db.add(c)
+    course = Course(**payload.model_dump())
+    db.add(course)
     db.commit()
-    db.refresh(c)
-    return c
+    db.refresh(course)
+    return course
 
 
-# --------------
-# READ — list all
-# --------------
+# =====================================================
+# LIST COURSES (AUTH REQUIRED)
+# =====================================================
 @router.get("/", response_model=list[CourseResponse])
 def list_courses(
-    department: Optional[str] = None,
     teacher_id: Optional[int] = None,
     code_contains: Optional[str] = None,
     title_contains: Optional[str] = None,
@@ -61,41 +50,38 @@ def list_courses(
     db: Session = Depends(get_db_connection),
     _=Depends(get_current_user),
 ):
-    """
-    List courses with filters + pagination.
-    """
     q = db.query(Course)
 
-    if department:
-        q = q.filter(Course.department == department)
-    if teacher_id:
+    if teacher_id is not None:
         q = q.filter(Course.teacher_id == teacher_id)
+
     if code_contains:
         q = q.filter(Course.code.ilike(f"%{code_contains}%"))
+
     if title_contains:
         q = q.filter(Course.title.ilike(f"%{title_contains}%"))
 
     return q.order_by(Course.id).offset(skip).limit(limit).all()
 
 
-# ----------------
-# READ — single by id
-# ----------------
+# =====================================================
+# GET SINGLE COURSE (AUTH REQUIRED)
+# =====================================================
 @router.get("/{course_id}", response_model=CourseResponse)
 def get_course(
     course_id: int,
     db: Session = Depends(get_db_connection),
     _=Depends(get_current_user),
 ):
-    c = db.get(Course, course_id)
-    if not c:
+    course = db.get(Course, course_id)
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    return c
+    return course
 
 
-# -----------
-# UPDATE — PUT
-# -----------
+# =====================================================
+# UPDATE COURSE (ADMIN ONLY)
+# =====================================================
 @router.put("/{course_id}", response_model=CourseResponse)
 def update_course(
     course_id: int,
@@ -103,63 +89,50 @@ def update_course(
     db: Session = Depends(get_db_connection),
     _=Depends(require_admin),
 ):
-    """
-    Update existing course.
-
-    Partial update: sirf woh fields change hongi
-    jo request body me send ki gai hain.
-    """
-    c = db.get(Course, course_id)
-    if not c:
+    course = db.get(Course, course_id)
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
     update_data = payload.model_dump(exclude_unset=True)
 
-    # if code is being changed, keep it unique
-    new_code = update_data.get("code")
-    if new_code and new_code != c.code:
+    # Unique code check
+    if "code" in update_data and update_data["code"] != course.code:
         exists = (
             db.query(Course)
-            .filter(Course.code == new_code, Course.id != course_id)
+            .filter(Course.code == update_data["code"], Course.id != course_id)
             .first()
         )
         if exists:
             raise HTTPException(status_code=400, detail="Course code already in use")
 
-    # if teacher_id changed, ensure teacher exists
-    new_teacher_id = update_data.get("teacher_id")
-    if new_teacher_id is not None:
-        teacher = db.get(Teacher, new_teacher_id)
+    # Validate teacher
+    if "teacher_id" in update_data and update_data["teacher_id"] is not None:
+        teacher = db.get(Teacher, update_data["teacher_id"])
         if not teacher:
             raise HTTPException(status_code=404, detail="Assigned teacher not found")
 
     for field, value in update_data.items():
-        setattr(c, field, value)
+        setattr(course, field, value)
 
-    db.add(c)
     db.commit()
-    db.refresh(c)
-    return c
+    db.refresh(course)
+    return course
 
 
-# ------------
-# DELETE — by id
-# ------------
+# =====================================================
+# DELETE COURSE (ADMIN ONLY)
+# =====================================================
 @router.delete("/{course_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_course(
     course_id: int,
     db: Session = Depends(get_db_connection),
     _=Depends(require_admin),
 ):
-    """
-    Delete course by ID.
-    Prevent deletion if enrollments exist.
-    """
-    c = db.get(Course, course_id)
-    if not c:
+    course = db.get(Course, course_id)
+    if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    # check if any students still enrolled
+    # Prevent delete if enrollments exist
     has_enrollments = (
         db.query(Enrollment)
         .filter(Enrollment.course_id == course_id)
@@ -171,6 +144,6 @@ def delete_course(
             detail="Cannot delete: students are still enrolled in this course",
         )
 
-    db.delete(c)
+    db.delete(course)
     db.commit()
     return None

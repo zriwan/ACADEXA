@@ -45,15 +45,15 @@ class Teacher(Base):
 # --- Course ---
 class Course(Base):
     __tablename__ = "courses"
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String(100), nullable=False)
-    code = Column(String(20), unique=True, nullable=False, index=True)
-    credit_hours = Column(Integer, nullable=False)
-    teacher_id = Column(
-        Integer, ForeignKey("teachers.id", ondelete="SET NULL"), nullable=True
-    )  # <- DB-level behavior
 
-    teacher = relationship("Teacher", back_populates="courses")
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    code = Column(String, nullable=False, unique=True)
+    credit_hours = Column(Integer, nullable=False)
+
+    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=True)
+    teacher = relationship("Teacher")
+
 
 
 # --- Enrollment ---

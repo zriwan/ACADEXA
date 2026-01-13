@@ -4,6 +4,9 @@ import React, { useEffect, useState } from "react";
 import { api, setAuthToken } from "./api/client";
 import { Student, StudentCreatePayload, TokenResponse } from "./types";
 
+const TOKEN_KEY = "acadexa_token";
+const EMAIL_KEY = "acadexa_email";
+
 const StudentsPage: React.FC = () => {
   // Auth state
   const [email, setEmail] = useState<string>("");
@@ -24,46 +27,90 @@ const StudentsPage: React.FC = () => {
 
   const [editingId, setEditingId] = useState<number | null>(null);
 
+  // ---- Helpers ----
+  const restoreSession = () => {
+    const token = localStorage.getItem(TOKEN_KEY);
+    const savedEmail = localStorage.getItem(EMAIL_KEY);
+
+    if (token) {
+      setAuthToken(token);
+      if (savedEmail) setLoggedInAs(savedEmail);
+      return true;
+    }
+    return false;
+  };
+
+  const logout = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(EMAIL_KEY);
+    setAuthToken(null);
+    setLoggedInAs(null);
+    setEmail("");
+    setPassword("");
+  };
+
+  // ---- Auth ----
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+
     try {
       setAuthError(null);
 
-      const formData = new URLSearchParams();
-      formData.append("username", email);
-      formData.append("password", password);
+      // ✅ Backend expects x-www-form-urlencoded with keys: username, password
+      const body = new URLSearchParams();
+      body.append("username", email); // email goes into "username"
+      body.append("password", password);
 
-      const res = await api.post<TokenResponse>("/auth/login", formData, {
+      const res = await api.post<TokenResponse>("/auth/login", body, {
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
       });
 
       const token = res.data.access_token;
+
+      // Persist session
+      localStorage.setItem(TOKEN_KEY, token);
+      localStorage.setItem(EMAIL_KEY, email);
+
       setAuthToken(token);
       setLoggedInAs(email);
+
+      // Optional: load students after login
+      await fetchStudents(true);
     } catch (err: any) {
       console.error(err);
       setAuthError("Login failed. Check email/password.");
-      setAuthToken(null);
-      setLoggedInAs(null);
+      logout();
     }
   };
 
-  const fetchStudents = async () => {
+  // ---- Data ----
+  const fetchStudents = async (silent: boolean = false) => {
     try {
-      setLoading(true);
+      if (!silent) {
+        setLoading(true);
+      }
       setError(null);
+
       const res = await api.get<Student[]>("/students/");
       setStudents(res.data);
     } catch (err: any) {
       console.error(err);
-      setError("Failed to load students");
+      setError("Failed to load students (are you logged in?)");
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    fetchStudents();
+    // Try to restore session first
+    const hasSession = restoreSession();
+
+    // Fetch students (will succeed only if token exists)
+    if (hasSession) {
+      fetchStudents();
+    }
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,6 +129,12 @@ const StudentsPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!loggedInAs) {
+      setError("Please login first.");
+      return;
+    }
+
     try {
       setError(null);
 
@@ -92,7 +145,7 @@ const StudentsPage: React.FC = () => {
       }
 
       resetForm();
-      await fetchStudents();
+      await fetchStudents(true);
     } catch (err: any) {
       console.error(err);
       setError(
@@ -114,13 +167,19 @@ const StudentsPage: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
+    if (!loggedInAs) {
+      setError("Please login first.");
+      return;
+    }
+
     if (!window.confirm("Are you sure you want to delete this student?")) {
       return;
     }
+
     try {
       setError(null);
       await api.delete(`/students/${id}`);
-      await fetchStudents();
+      await fetchStudents(true);
     } catch (err: any) {
       console.error(err);
       setError("Failed to delete student (maybe not authenticated?)");
@@ -139,11 +198,17 @@ const StudentsPage: React.FC = () => {
         <div className="card-header">
           <h2 className="card-title">Login</h2>
         </div>
+
         <div className="card-body">
           {loggedInAs ? (
-            <p>
-              Logged in as <strong>{loggedInAs}</strong>
-            </p>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <p>
+                Logged in as <strong>{loggedInAs}</strong>
+              </p>
+              <button type="button" className="btn btn-secondary" onClick={logout}>
+                Logout
+              </button>
+            </div>
           ) : (
             <form onSubmit={handleLogin}>
               <div className="form-row">
@@ -156,6 +221,7 @@ const StudentsPage: React.FC = () => {
                   placeholder="admin@example.com"
                 />
               </div>
+
               <div className="form-row">
                 <label>Password</label>
                 <input
@@ -166,11 +232,13 @@ const StudentsPage: React.FC = () => {
                   placeholder="••••••••"
                 />
               </div>
+
               <button type="submit" className="btn btn-primary">
                 Login
               </button>
             </form>
           )}
+
           {authError && <div className="alert alert-error">{authError}</div>}
         </div>
       </section>
@@ -182,16 +250,18 @@ const StudentsPage: React.FC = () => {
             {editingId === null ? "Add Student" : `Edit Student #${editingId}`}
           </h2>
         </div>
+
         <div className="card-body">
+          {!loggedInAs && (
+            <div className="alert alert-error" style={{ marginBottom: "1rem" }}>
+              Please login to create, update, or delete students.
+            </div>
+          )}
+
           <form onSubmit={handleSubmit}>
             <div className="form-row">
               <label>Name</label>
-              <input
-                name="name"
-                value={form.name}
-                onChange={handleChange}
-                required
-              />
+              <input name="name" value={form.name} onChange={handleChange} required />
             </div>
 
             <div className="form-row">
@@ -218,9 +288,10 @@ const StudentsPage: React.FC = () => {
               />
             </div>
 
-            <button type="submit" className="btn btn-primary">
+            <button type="submit" className="btn btn-primary" disabled={!loggedInAs}>
               {editingId === null ? "Create" : "Update"}
             </button>
+
             {editingId !== null && (
               <button
                 type="button"
@@ -232,6 +303,7 @@ const StudentsPage: React.FC = () => {
               </button>
             )}
           </form>
+
           {error && <div className="alert alert-error">{error}</div>}
         </div>
       </section>
@@ -239,13 +311,28 @@ const StudentsPage: React.FC = () => {
       {/* List students */}
       <section>
         <div className="card">
-          <div className="card-header">
+          <div className="card-header" style={{ display: "flex", justifyContent: "space-between" }}>
             <h2 className="card-title">All Students</h2>
+            <button
+              className="btn btn-secondary"
+              onClick={() => fetchStudents()}
+              disabled={!loggedInAs}
+              title={!loggedInAs ? "Login required" : "Refresh list"}
+            >
+              Refresh
+            </button>
           </div>
+
           <div className="card-body">
             {loading && <p>Loading...</p>}
-            {!loading && students.length === 0 && <p>No students found.</p>}
-            {!loading && students.length > 0 && (
+
+            {!loading && !loggedInAs && (
+              <p>Please login to view student records.</p>
+            )}
+
+            {!loading && loggedInAs && students.length === 0 && <p>No students found.</p>}
+
+            {!loading && loggedInAs && students.length > 0 && (
               <table className="table">
                 <thead>
                   <tr>
@@ -256,6 +343,7 @@ const StudentsPage: React.FC = () => {
                     <th>Actions</th>
                   </tr>
                 </thead>
+
                 <tbody>
                   {students.map((s) => (
                     <tr key={s.id}>
@@ -265,16 +353,10 @@ const StudentsPage: React.FC = () => {
                       <td>{s.gpa}</td>
                       <td>
                         <div className="table-actions">
-                          <button
-                            className="btn btn-secondary"
-                            onClick={() => startEdit(s)}
-                          >
+                          <button className="btn btn-secondary" onClick={() => startEdit(s)}>
                             Edit
                           </button>
-                          <button
-                            className="btn btn-danger"
-                            onClick={() => handleDelete(s.id)}
-                          >
+                          <button className="btn btn-danger" onClick={() => handleDelete(s.id)}>
                             Delete
                           </button>
                         </div>
@@ -284,6 +366,7 @@ const StudentsPage: React.FC = () => {
                 </tbody>
               </table>
             )}
+
           </div>
         </div>
       </section>
