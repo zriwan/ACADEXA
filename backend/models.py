@@ -26,6 +26,10 @@ class Student(Base):
     department = Column(String(50), index=True)
     gpa = Column(Numeric(3, 2))
 
+    # ✅ Link Student -> User (auth)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=True)
+    user = relationship("User", back_populates="student", uselist=False)
+
 
 # --- Teacher ---
 class Teacher(Base):
@@ -41,6 +45,10 @@ class Teacher(Base):
         "Course", back_populates="teacher", cascade="all, delete-orphan"
     )
 
+    # ✅ Link Teacher -> User (auth)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=True)
+    user = relationship("User", back_populates="teacher", uselist=False)
+
 
 # --- Course ---
 class Course(Base):
@@ -52,8 +60,7 @@ class Course(Base):
     credit_hours = Column(Integer, nullable=False)
 
     teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=True)
-    teacher = relationship("Teacher")
-
+    teacher = relationship("Teacher", back_populates="courses")
 
 
 # --- Enrollment ---
@@ -69,14 +76,10 @@ class Enrollment(Base):
     )
 
     semester = Column(String(20), nullable=True)  # e.g., "Fall 2025"
-    status = Column(
-        String(20), nullable=True, default="enrolled"
-    )  # enrolled|dropped|completed
+    status = Column(String(20), nullable=True, default="enrolled")  # enrolled|dropped|completed
     grade = Column(Numeric(3, 2), nullable=True)  # e.g., 3.50
 
-    created_at = Column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -95,7 +98,9 @@ class Enrollment(Base):
 # ===== Auth models =====
 class UserRole(str, Enum):
     admin = "admin"
-    user = "user"
+    student = "student"
+    teacher = "teacher"
+    hod = "hod"
 
 
 class User(Base):
@@ -105,12 +110,18 @@ class User(Base):
     name = Column(String(120), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
+
     role = Column(
-        SAEnum(UserRole, name="user_role"), nullable=False, default=UserRole.user
+        SAEnum(UserRole, name="user_role"),
+        nullable=False,
+        default=UserRole.student,
     )
-    created_at = Column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # ✅ Back references to Student/Teacher
+    student = relationship("Student", back_populates="user", uselist=False)
+    teacher = relationship("Teacher", back_populates="user", uselist=False)
 
 
 # Optional extra composite indexes

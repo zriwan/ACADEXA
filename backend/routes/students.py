@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from backend.models import Student, User, UserRole, Enrollment
 
 from backend.database import get_db_connection
-from backend.models import Student
+from backend.models import Student, User, UserRole
 from backend.schemas import (
     StudentCreate,
     StudentResponse,
@@ -12,6 +13,33 @@ from backend.schemas import (
 from ..security import get_current_user, require_admin  # ✅ auth guards
 
 router = APIRouter(prefix="/students", tags=["Students"])
+
+
+# -----------------------------
+# /students/me → current student's profile (Day-2 Part-E)
+# IMPORTANT: keep this ABOVE "/{student_id}" route
+# -----------------------------
+@router.get("/me", response_model=StudentResponse)
+def get_my_student_profile(
+    db: Session = Depends(get_db_connection),
+    current_user: User = Depends(get_current_user),
+):
+    # ✅ Only students can access
+    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    if role_value != UserRole.student:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Student access required",
+        )
+
+    # ✅ Must be linked to a Student row (students.user_id = users.id)
+    if not current_user.student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Student record not linked to this user",
+        )
+
+    return current_user.student
 
 
 # ---------------------------
@@ -27,8 +55,6 @@ def add_student(
     Create a new student.
     Uses StudentCreate schema (name, department, gpa, etc.).
     """
-    # Agar future me StudentCreate me extra fields aajayen,
-    # to yeh approach automatically map kar dega:
     data = payload.model_dump()
     s = Student(**data)
 
@@ -80,7 +106,7 @@ def get_student(
     """
     Get single student by numeric ID.
     """
-    student = db.get(Student, student_id)  # SQLAlchemy 1.4/2.0 style
+    student = db.get(Student, student_id)
 
     if not student:
         raise HTTPException(
@@ -104,8 +130,7 @@ def update_student(
     """
     Update existing student.
     Uses StudentUpdate schema.
-    - Agar StudentUpdate me fields OPTIONAL hon,
-      to sirf wahi fields update hongi jo request me aayi hain.
+    - partial update: only fields provided will be updated.
     """
     student = db.get(Student, student_id)
     if not student:
@@ -114,9 +139,7 @@ def update_student(
             detail="Student not found",
         )
 
-    # ✅ Partial update using Pydantic v2 style
     update_data = payload.model_dump(exclude_unset=True)
-
     for field, value in update_data.items():
         setattr(student, field, value)
 
@@ -148,5 +171,84 @@ def delete_student(
 
     db.delete(student)
     db.commit()
-    # 204 No Content → koi body return nahi hoti
     return None
+
+
+# -----------------------------
+# /students/me/gpa
+# -----------------------------
+@router.get("/me/gpa")
+def get_my_gpa(
+    db: Session = Depends(get_db_connection),
+    current_user: User = Depends(get_current_user),
+):
+    # role check
+    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    if role_value != UserRole.student:
+        raise HTTPException(status_code=403, detail="Student access required")
+
+    if not current_user.student:
+        raise HTTPException(status_code=404, detail="Student record not linked")
+
+    return {
+        "student_id": current_user.student.id,
+        "gpa": float(current_user.student.gpa) if current_user.student.gpa is not None else None,
+    }
+
+# -----------------------------
+# /students/me/courses
+# -----------------------------
+@router.get("/me/courses")
+def get_my_courses(
+    db: Session = Depends(get_db_connection),
+    current_user: User = Depends(get_current_user),
+):
+    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    if role_value != UserRole.student:
+        raise HTTPException(status_code=403, detail="Student access required")
+
+    if not current_user.student:
+        raise HTTPException(status_code=404, detail="Student record not linked")
+
+    enrollments = (
+        db.query(Enrollment)
+        .filter(Enrollment.student_id == current_user.student.id)
+        .all()
+    )
+
+    courses = []
+    for e in enrollments:
+        if e.course:
+            courses.append({
+                "course_id": e.course.id,
+                "title": e.course.title,
+                "code": e.course.code,
+                "credit_hours": e.course.credit_hours,
+            })
+
+    return {
+        "student_id": current_user.student.id,
+        "courses": courses,
+    }
+# -----------------------------
+# /students/me/enrollments
+# -----------------------------
+@router.get("/me/enrollments")
+def get_my_enrollments(
+    db: Session = Depends(get_db_connection),
+    current_user: User = Depends(get_current_user),
+):
+    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    if role_value != UserRole.student:
+        raise HTTPException(status_code=403, detail="Student access required")
+
+    if not current_user.student:
+        raise HTTPException(status_code=404, detail="Student record not linked")
+
+    enrollments = (
+        db.query(Enrollment)
+        .filter(Enrollment.student_id == current_user.student.id)
+        .all()
+    )
+
+    return enrollments

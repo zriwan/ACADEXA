@@ -74,3 +74,21 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != UserRole.admin:
         raise HTTPException(status_code=403, detail="Admin privileges required")
     return user
+
+
+def require_student(user: User = Depends(get_current_user)) -> User:
+    if user.role != UserRole.student:
+        raise HTTPException(status_code=403, detail="Student privileges required")
+    return user
+
+
+def require_teacher(user: User = Depends(get_current_user)) -> User:
+    if user.role != UserRole.teacher:
+        raise HTTPException(status_code=403, detail="Teacher privileges required")
+    return user
+
+
+def require_hod(user: User = Depends(get_current_user)) -> User:
+    if user.role != UserRole.hod:
+        raise HTTPException(status_code=403, detail="HOD privileges required")
+    return user

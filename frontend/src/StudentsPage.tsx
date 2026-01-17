@@ -130,10 +130,11 @@ const StudentsPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!loggedInAs) {
-      setError("Please login first.");
-      return;
-    }
+   if (!localStorage.getItem("acadexa_token")) {
+  setError("Please login first.");
+  return;
+}
+
 
     try {
       setError(null);
@@ -167,10 +168,11 @@ const StudentsPage: React.FC = () => {
   };
 
   const handleDelete = async (id: number) => {
-    if (!loggedInAs) {
-      setError("Please login first.");
-      return;
-    }
+   if (!localStorage.getItem("acadexa_token")) {
+  setError("Please login first.");
+  return;
+}
+
 
     if (!window.confirm("Are you sure you want to delete this student?")) {
       return;

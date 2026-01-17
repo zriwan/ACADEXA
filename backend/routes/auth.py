@@ -2,6 +2,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from backend.schemas import MeResponse
+
 
 from ..database import get_db_connection
 from ..models import User, UserRole
@@ -45,11 +47,12 @@ def register_user(
 
     # validate role string -> Enum
     try:
-        role = UserRole[user_in.role]
-    except KeyError:
+        role = UserRole(user_in.role)
+
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid role, must be 'admin' or 'user'",
+            detail="Invalid role, must be one of: admin, student, teacher, hod ",
         )
 
     user = User(
@@ -161,9 +164,18 @@ def login_json(
 # -----------------------------
 # /auth/me → current user
 # -----------------------------
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=MeResponse)
 def me(current_user: User = Depends(get_current_user)):
     """
     Return the currently authenticated user based on the JWT token.
+    Includes linked student_id / teacher_id (Day-2).
     """
-    return current_user
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "role": current_user.role,
+        "student_id": current_user.student.id if current_user.student else None,
+        "teacher_id": current_user.teacher.id if current_user.teacher else None,
+    }
+

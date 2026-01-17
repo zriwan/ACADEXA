@@ -1,8 +1,8 @@
 # backend/schemas.py
-from __future__ import annotations  # ✅ handles forward refs in Pydantic v2
+from __future__ import annotations
 
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -24,6 +24,7 @@ class StudentUpdate(BaseModel):
 
 class StudentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     department: str
@@ -49,6 +50,7 @@ class TeacherUpdate(BaseModel):
 
 class TeacherResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     department: str
@@ -63,18 +65,19 @@ class CourseCreate(BaseModel):
     title: str
     code: str
     credit_hours: int
-    teacher_id: int | None = None
+    teacher_id: Optional[int] = None
 
 
 class CourseUpdate(BaseModel):
-    title: str
-    code: str
-    credit_hours: int
-    teacher_id: int | None = None
+    title: Optional[str] = None
+    code: Optional[str] = None
+    credit_hours: Optional[int] = None
+    teacher_id: Optional[int] = None
 
 
 class CourseResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     title: str
     code: str
@@ -83,10 +86,11 @@ class CourseResponse(BaseModel):
 
 
 # -------------------------
-# Enrollments (single, extended versions only)
+# Enrollments
 # -------------------------
 class StudentBrief(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     department: str
@@ -95,6 +99,7 @@ class StudentBrief(BaseModel):
 
 class CourseBrief(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     title: str
     code: str
@@ -110,12 +115,13 @@ class EnrollmentCreate(BaseModel):
 
 class EnrollmentUpdate(BaseModel):
     semester: str | None = Field(default=None, max_length=20)
-    status: str | None = Field(default=None)  # "enrolled" | "dropped" | "completed"
+    status: str | None = Field(default=None)  # enrolled|dropped|completed
     grade: float | None = Field(default=None, ge=0, le=4)  # 0.00..4.00
 
 
 class EnrollmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     student_id: int
     course_id: int
@@ -126,6 +132,7 @@ class EnrollmentResponse(BaseModel):
 
 class EnrollmentDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
     id: int
     semester: str | None = None
     status: str | None = None
@@ -135,12 +142,12 @@ class EnrollmentDetailResponse(BaseModel):
 
 
 # ======================
-# AUTH SCHEMAS (Day 8)
+# AUTH SCHEMAS
 # ======================
 class UserBase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     email: EmailStr
-    role: Literal["admin", "user"] = "user"
+    role: Literal["admin", "student", "teacher", "hod", "user"] = "student"
 
 
 class UserCreate(UserBase):
@@ -153,11 +160,27 @@ class UserLogin(BaseModel):
 
 
 class UserResponse(UserBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    model_config = {"from_attributes": True}
+    student_id: int | None = None
+    teacher_id: int | None = None
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     refresh_token: str | None = None
+
+
+# ✅ Day-2 Part-C: /auth/me response schema
+class MeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    email: EmailStr
+    role: Literal["admin", "student", "teacher", "hod", "user"]
+
+    student_id: int | None = None
+    teacher_id: int | None = None

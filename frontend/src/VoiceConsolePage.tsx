@@ -1,13 +1,36 @@
 // src/VoiceConsolePage.tsx
-
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/client";
 
 type SpeechRecognitionType = any;
 
+type Me = {
+  id: number;
+  name: string;
+  email: string;
+  role: "admin" | "student" | "teacher" | "hod";
+  student_id?: number | null;
+  teacher_id?: number | null;
+};
+
+type HistoryItem = {
+  id: string;
+  text: string;
+  at: string;
+  response?: any;
+  error?: string | null;
+};
+
+function makeId() {
+  return Math.random().toString(16).slice(2) + Date.now().toString(16);
+}
+
 const VoiceConsolePage: React.FC = () => {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // auth/me
+  const [me, setMe] = useState<Me | null>(null);
 
   // voice states
   const [listening, setListening] = useState(false);
@@ -16,12 +39,30 @@ const VoiceConsolePage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [responseJson, setResponseJson] = useState<any | null>(null);
 
+  // history
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
   const recognitionRef = useRef<SpeechRecognitionType | null>(null);
+
+  const [showRaw, setShowRaw] = useState(false);
 
   // Detect SpeechRecognition support (Chrome/Edge)
   const SpeechRecognitionCtor = useMemo(() => {
     const w: any = window;
     return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+  }, []);
+
+  // load me
+  useEffect(() => {
+    async function loadMe() {
+      try {
+        const res = await api.get("/auth/me");
+        setMe(res.data);
+      } catch {
+        setMe(null);
+      }
+    }
+    loadMe();
   }, []);
 
   useEffect(() => {
@@ -47,7 +88,6 @@ const VoiceConsolePage: React.FC = () => {
     rec.onerror = (e: any) => {
       setListening(false);
 
-      // common cases: "not-allowed", "service-not-allowed", "no-speech"
       if (e?.error === "not-allowed" || e?.error === "service-not-allowed") {
         setError(
           "Microphone permission denied. Allow mic permission in browser site settings, then reload."
@@ -60,7 +100,6 @@ const VoiceConsolePage: React.FC = () => {
     };
 
     rec.onresult = (event: any) => {
-      // Build transcript from results
       let transcript = "";
       let finalTranscript = "";
 
@@ -78,9 +117,6 @@ const VoiceConsolePage: React.FC = () => {
       if (merged) {
         setText(merged);
       }
-
-      // OPTIONAL: Auto-send after final result
-      // if (finalTranscript.trim()) sendCommand(finalTranscript.trim());
     };
 
     recognitionRef.current = rec;
@@ -107,8 +143,7 @@ const VoiceConsolePage: React.FC = () => {
 
     try {
       recognitionRef.current.start();
-    } catch (e) {
-      // Some browsers throw if start() called twice
+    } catch {
       setError("Could not start microphone. Please try again.");
     }
   };
@@ -121,42 +156,64 @@ const VoiceConsolePage: React.FC = () => {
     }
   };
 
+  const pushHistory = (item: HistoryItem) => {
+    setHistory((prev) => {
+      const next = [item, ...prev];
+      return next.slice(0, 10);
+    });
+  };
+
+  const updateHistory = (id: string, patch: Partial<HistoryItem>) => {
+    setHistory((prev) =>
+      prev.map((h) => (h.id === id ? { ...h, ...patch } : h))
+    );
+  };
+
   const sendCommand = async (overrideText?: string) => {
     const command = (overrideText ?? text).trim();
     if (!command) return;
+
+    const historyId = makeId();
+    pushHistory({
+      id: historyId,
+      text: command,
+      at: new Date().toLocaleString(),
+    });
 
     try {
       setLoading(true);
       setError(null);
       setResponseJson(null);
 
-      // backend: POST /voice/command  { "text": "..." }
       const res = await api.post("/voice/command", { text: command });
 
       setResponseJson(res.data);
+      updateHistory(historyId, { response: res.data, error: null });
+
       setText("");
     } catch (err: any) {
       console.error(err);
 
+      let msg = "Unknown error";
       if (err.response) {
         const status = err.response.status;
         const data = err.response.data;
 
         if (status === 401) {
-          setError("Not authenticated. Please login first on the Students tab.");
+          msg = "Not authenticated. Please login first.";
         } else {
-          setError(
+          msg =
             `Error ${status}: ` +
-              (typeof data === "string" ? data : JSON.stringify(data))
-          );
+            (typeof data === "string" ? data : JSON.stringify(data));
         }
       } else if (err.request) {
-        setError(
-          "No response from server. Is backend running on 127.0.0.1:8000?"
-        );
+        msg = "No response from server. Is backend running on 127.0.0.1:8000?";
       } else {
-        setError("Unexpected error: " + err.message);
+        msg = "Unexpected error: " + err.message;
       }
+
+      setError(msg);
+      updateHistory(historyId, { error: msg });
     } finally {
       setLoading(false);
     }
@@ -175,7 +232,6 @@ const VoiceConsolePage: React.FC = () => {
   };
 
   // ------- UI helper: render structured table from results -------
-
   const renderResultsTable = () => {
     if (!responseJson) return null;
 
@@ -278,8 +334,8 @@ const VoiceConsolePage: React.FC = () => {
           </thead>
           <tbody>
             {results.map((en: any) => (
-              <tr key={en.id}>
-                <td>{en.id}</td>
+              <tr key={en.id ?? en.enrollment_id}>
+                <td>{en.id ?? en.enrollment_id}</td>
                 <td>
                   {en.student_name
                     ? `${en.student_name} (#${en.student_id})`
@@ -336,6 +392,37 @@ const VoiceConsolePage: React.FC = () => {
     return <div className="mt-4">{renderResultsTable()}</div>;
   };
 
+  // role-based quick commands
+  const quickCommands = useMemo(() => {
+    const role = me?.role;
+
+    if (role === "student") {
+      return [
+        "show my gpa",
+        "which courses am I enrolled in",
+        "my enrollments",
+        "list courses",
+      ];
+    }
+
+    if (role === "teacher") {
+      return [
+        "which courses am I teaching",
+        "show my enrollments",
+        "list courses",
+        "list students",
+      ];
+    }
+
+    // admin / hod fallback
+    return [
+      "list students",
+      "list teachers",
+      "list courses",
+      "list enrollments for student 1",
+    ];
+  }, [me?.role]);
+
   return (
     <div>
       <h1 className="page-title">Command</h1>
@@ -344,9 +431,42 @@ const VoiceConsolePage: React.FC = () => {
         results.
       </p>
 
+      {/* Quick commands */}
+      <section className="card">
+        <div className="card-header">
+          <h2 className="card-title">
+            Quick Commands {me ? `(${me.role})` : ""}
+          </h2>
+        </div>
+        <div
+          className="card-body"
+          style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+        >
+          {quickCommands.map((cmd) => (
+            <button
+              key={cmd}
+              className="btn btn-secondary"
+              disabled={loading}
+              onClick={() => sendCommand(cmd)}
+              type="button"
+            >
+              {cmd}
+            </button>
+          ))}
+        </div>
+      </section>
+
       {/* Command input card */}
       <section className="card">
-        <div className="card-header" style={{ display: "flex", gap: "0.5rem", justifyContent: "space-between", alignItems: "center" }}>
+        <div
+          className="card-header"
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
           <h2 className="card-title">Command Console</h2>
 
           <div style={{ display: "flex", gap: "0.5rem" }}>
@@ -400,27 +520,73 @@ const VoiceConsolePage: React.FC = () => {
           )}
 
           {error && <div className="alert alert-error">{error}</div>}
+        </div>
+      </section>
 
-          {/* Suggested commands */}
-          <div style={{ marginTop: "0.75rem", fontSize: "0.85rem" }}>
-            <p style={{ marginBottom: "0.25rem" }}>
-              <strong>Examples:</strong>
-            </p>
-            <ul
-              style={{
-                paddingLeft: "1.2rem",
-                margin: 0,
-                color: "#6b7280",
-                lineHeight: 1.4,
-              }}
-            >
-              <li>list students</li>
-              <li>list courses</li>
-              <li>list teachers</li>
-              <li>list enrollments for student 3</li>
-              <li>list students in course cs101</li>
-            </ul>
-          </div>
+      {/* History card */}
+      <section className="card">
+        <div className="card-header">
+          <h2 className="card-title">History (last 10)</h2>
+        </div>
+        <div className="card-body">
+          {history.length === 0 && <p>No history yet.</p>}
+          {history.length > 0 && (
+            <div style={{ display: "grid", gap: 8 }}>
+              {history.map((h) => (
+                <div
+                  key={h.id}
+                  style={{
+                    border: "1px solid #eee",
+                    borderRadius: 8,
+                    padding: 10,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {h.text}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>{h.at}</div>
+                    {h.error && (
+                      <div style={{ fontSize: 12, color: "crimson" }}>
+                        {h.error}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      disabled={loading}
+                      onClick={() => sendCommand(h.text)}
+                    >
+                      Run
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      type="button"
+                      disabled={loading || !h.response}
+                      onClick={() => setResponseJson(h.response)}
+                      title={!h.response ? "No response stored" : ""}
+                    >
+                      View
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -429,6 +595,7 @@ const VoiceConsolePage: React.FC = () => {
         <div className="card-header">
           <h2 className="card-title">Response</h2>
         </div>
+
         <div className="card-body">
           {!responseJson && !loading && <p>No command run yet.</p>}
           {loading && <p>Waiting for response...</p>}
@@ -440,19 +607,6 @@ const VoiceConsolePage: React.FC = () => {
                   <p>
                     <strong>Info:</strong> {responseJson.info}
                   </p>
-
-                  {(responseJson.parsed?.intent || "unknown") === "unknown" && (
-                    <p
-                      style={{
-                        fontSize: "0.75rem",
-                        color: "#b91c1c",
-                        marginTop: "0.25rem",
-                      }}
-                    >
-                      I couldn't understand this command. Try one of the
-                      examples above.
-                    </p>
-                  )}
                 </div>
               )}
 
@@ -463,28 +617,32 @@ const VoiceConsolePage: React.FC = () => {
 
               {renderResultsSection()}
 
-              <h3
-                style={{
-                  marginTop: "1rem",
-                  marginBottom: "0.4rem",
-                  fontSize: "0.9rem",
-                }}
-              >
-                Raw JSON
-              </h3>
-              <pre
-                style={{
-                  background: "#0b1120",
-                  color: "#e5e7eb",
-                  padding: "0.75rem",
-                  borderRadius: 8,
-                  fontSize: "0.8rem",
-                  overflowX: "auto",
-                  maxHeight: 300,
-                }}
-              >
-                {JSON.stringify(responseJson, null, 2)}
-              </pre>
+              <div style={{ marginTop: "1rem" }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowRaw((v) => !v)}
+                >
+                  {showRaw ? "Hide Raw JSON" : "Show Raw JSON"}
+                </button>
+
+                {showRaw && (
+                  <pre
+                    style={{
+                      marginTop: "0.5rem",
+                      background: "#0b1120",
+                      color: "#e5e7eb",
+                      padding: "0.75rem",
+                      borderRadius: 8,
+                      fontSize: "0.8rem",
+                      overflowX: "auto",
+                      maxHeight: 300,
+                    }}
+                  >
+                    {JSON.stringify(responseJson, null, 2)}
+                  </pre>
+                )}
+              </div>
             </>
           )}
         </div>
