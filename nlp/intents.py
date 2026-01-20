@@ -27,9 +27,7 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
     # delete_student
     {
         "name": "delete_student",
-        "regex": re.compile(
-            r"^(?:delete|remove)\s+student\s+(?P<student_id>\d+)$"
-        ),
+        "regex": re.compile(r"^(?:delete|remove)\s+student\s+(?P<student_id>\d+)$"),
         "post": lambda m: {"student_id": int(m.group("student_id"))},
     },
 
@@ -46,10 +44,7 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
         },
     },
 
-    # list_students — with optional course:
-    #   "list all students"
-    #   "show students in course cs101"
-    #   "display students in course ai-101"
+    # list_students — with optional course
     {
         "name": "list_students",
         "regex": re.compile(
@@ -57,18 +52,13 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
             r"(?:\s+in\s+course\s+(?P<course>[a-z0-9\-]+))?$"
         ),
         "post": lambda m: (
-            {"course": m.group("course")}
-            if m.groupdict().get("course")
-            else {}
+            {"course": m.group("course")} if m.groupdict().get("course") else {}
         ),
     },
 
     # ---------- Student results ----------
 
-    # show_student_result:
-    #   "Show result of student 125"
-    #   "Get marks of roll 77"
-    #   "display result student 9"
+    # show_student_result
     {
         "name": "show_student_result",
         "regex": re.compile(
@@ -102,14 +92,11 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
     # count_teachers
     {
         "name": "count_teachers",
-        "regex": re.compile(
-            r"^(?:how\s+many|count)\s+teachers$"
-        ),
+        "regex": re.compile(r"^(?:how\s+many|count)\s+teachers$"),
         "post": lambda m: {},
     },
 
     # assign_teacher_to_course
-    #   "assign teacher Ahmed Ali to course CS-101"
     {
         "name": "assign_teacher_to_course",
         "regex": re.compile(
@@ -124,45 +111,31 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
 
     # ---------- Day 6 — richer list intents ----------
 
-    # Extra list_students variant like:
-    #   "list students"
-    #   "get students list"
+    # Extra list_students variant
     {
         "name": "list_students",
-        "regex": re.compile(
-            r"^(?:list|show|get)\s+(?:all\s+)?students(?:\s+list)?$"
-        ),
+        "regex": re.compile(r"^(?:list|show|get)\s+(?:all\s+)?students(?:\s+list)?$"),
         "post": lambda m: {},
     },
 
-    # list_courses — basic:
-    #   "list courses"
-    #   "show all courses"
-    #   "get courses list"
+    # list_courses — basic
     {
         "name": "list_courses",
-        "regex": re.compile(
-            r"^(?:list|show|get)\s+(?:all\s+)?courses(?:\s+list)?$"
-        ),
+        "regex": re.compile(r"^(?:list|show|get)\s+(?:all\s+)?courses(?:\s+list)?$"),
         "post": lambda m: {},
     },
 
-    # list_courses in department:
-    #   "list courses in department CS"
-    #   "show courses in cs"
+    # list_courses in department
     {
         "name": "list_courses",
         "regex": re.compile(
             r"^(?:list|show|get)\s+courses\s+in\s+"
             r"(?:department\s+)?(?P<department>[a-z0-9\-]+)$"
         ),
-        # 🔹 normalize department to UPPER CASE for tests / backend
         "post": lambda m: {"department": m.group("department").upper()},
     },
 
-    # list_courses for teacher:
-    #   "list courses for teacher 2"
-    #   "show courses by teacher 2"
+    # list_courses for teacher
     {
         "name": "list_courses",
         "regex": re.compile(
@@ -171,20 +144,14 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
         "post": lambda m: {"teacher_id": int(m.group("teacher_id"))},
     },
 
-    # list_teachers:
-    #   "list teachers"
-    #   "show all teachers"
+    # list_teachers
     {
         "name": "list_teachers",
-        "regex": re.compile(
-            r"^(?:list|show|get)\s+(?:all\s+)?teachers(?:\s+list)?$"
-        ),
+        "regex": re.compile(r"^(?:list|show|get)\s+(?:all\s+)?teachers(?:\s+list)?$"),
         "post": lambda m: {},
     },
 
-    # list_enrollments_for_student:
-    #   "show enrollments for student 3"
-    #   "list courses for student 3"
+    # list_enrollments_for_student
     {
         "name": "list_enrollments_for_student",
         "regex": re.compile(
@@ -192,6 +159,47 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
             r"(?:for|of)\s+student\s+(?P<student_id>\d+)$"
         ),
         "post": lambda m: {"student_id": int(m.group("student_id"))},
+    },
+
+    # ✅ ---------- Day 3 — Voice USP Part-1 (CGPA) ----------
+    {
+        "name": "show_my_cgpa",
+        "regex": re.compile(
+            r"^(?:show|what\s+is|tell\s+me)\s+my\s+(?:cgpa|gpa)$|^my\s+(?:cgpa|gpa)$"
+        ),
+        "post": lambda m: {},
+    },
+
+    # ✅ ---------- Day 4 — Voice Part-2 (My Courses) ----------
+    # examples:
+    #   "show my courses"
+    #   "my courses"
+    #   "which courses am i enrolled in"
+    {
+        "name": "show_my_courses",
+        "regex": re.compile(
+            r"^(?:show|list|get)\s+my\s+courses$"
+            r"|^my\s+courses$"
+            r"|^(?:which|what)\s+courses\s+am\s+i\s+enrolled\s+in$"
+        ),
+        "post": lambda m: {},
+    },
+
+    # ✅ ---------- Day 4 — Voice Part-2 (My Result) ----------
+    # examples:
+    #   "show my result"
+    #   "my results"
+    #   "show my grades"
+    #   "what is my result"
+    {
+        "name": "show_my_result",
+        "regex": re.compile(
+            r"^(?:show|get)\s+my\s+results?$"
+            r"|^my\s+results?$"
+            r"|^(?:show|get)\s+my\s+grades$"
+            r"|^what\s+is\s+my\s+results?$"
+        ),
+        "post": lambda m: {},
     },
 ]
 

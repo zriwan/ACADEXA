@@ -1,10 +1,11 @@
 from typing import Optional, List
+from backend.models import Enrollment, Course, Student, User, UserRole
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 
 from backend.database import get_db_connection
-from backend.models import Enrollment, Student, Course
+
 from backend.schemas import (
     EnrollmentCreate,
     EnrollmentUpdate,
@@ -161,32 +162,82 @@ def update_enrollment(
     enrollment_id: int,
     payload: EnrollmentUpdate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),
+    current_user: User = Depends(get_current_user),  # ✅ get user
 ):
     """
-    Partially update an enrollment.
-    Typical editable fields:
-    - semester
-    - status
-    - grade
+    Teacher-only: update an enrollment (grade/status/semester)
+    Rules:
+      - Only TEACHER can update
+      - Teacher can update ONLY enrollments of courses they teach
+      - After grade update, student GPA is auto recalculated
     """
+    # ✅ role check
+    role_val = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    if role_val != UserRole.teacher:
+        raise HTTPException(status_code=403, detail="Teacher access required")
+
+    # ✅ teacher linked check
+    if not current_user.teacher:
+        raise HTTPException(status_code=404, detail="Teacher record not linked")
+
+    teacher_id = current_user.teacher.id
+
     e = db.get(Enrollment, enrollment_id)
     if not e:
         raise HTTPException(status_code=404, detail="Enrollment not found")
 
+    # ✅ ownership check: enrollment course must belong to this teacher
+    course = db.get(Course, e.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    if course.teacher_id != teacher_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only update enrollments of your own courses",
+        )
+
     update_data = payload.model_dump(exclude_unset=True)
 
-    # optionally you can restrict which fields are allowed to update
-    # e.g. only: semester, status, grade
+    # ✅ only allowed fields
     allowed_fields = {"semester", "status", "grade"}
     for field, value in update_data.items():
-        if field not in allowed_fields:
-            continue
-        setattr(e, field, value)
+        if field in allowed_fields:
+            setattr(e, field, value)
 
     db.add(e)
     db.commit()
     db.refresh(e)
+
+    # ✅ GPA auto recalculation after grade update
+    # GPA = sum(grade*credit_hours) / sum(credit_hours) for non-null grades
+    enroll_rows = (
+        db.query(Enrollment, Course)
+        .join(Course, Course.id == Enrollment.course_id)
+        .filter(Enrollment.student_id == e.student_id)
+        .all()
+    )
+
+    total_points = 0.0
+    total_credits = 0.0
+
+    for en, co in enroll_rows:
+        if en.grade is None:
+            continue
+        ch = float(getattr(co, "credit_hours", 0) or 0)
+        if ch <= 0:
+            continue
+        total_points += float(en.grade) * ch
+        total_credits += ch
+
+    new_gpa = round(total_points / total_credits, 2) if total_credits > 0 else None
+
+    student = db.get(Student, e.student_id)
+    if student:
+        student.gpa = new_gpa
+        db.add(student)
+        db.commit()
+
     return e
 
 

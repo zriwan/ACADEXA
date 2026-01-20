@@ -31,21 +31,17 @@ export default function TeacherHome() {
     <div style={{ padding: 16 }}>
       <h2>Teacher Dashboard</h2>
 
-      <div style={{ marginTop: 12 }}>
-        <h3>My Profile</h3>
-        <pre>{JSON.stringify(profile, null, 2)}</pre>
-      </div>
+      <h3>My Profile</h3>
+      <pre>{JSON.stringify(profile, null, 2)}</pre>
 
-      <div style={{ marginTop: 12 }}>
-        <h3>My Courses</h3>
-        <pre>{JSON.stringify(courses, null, 2)}</pre>
-      </div>
+      <h3>My Courses</h3>
+      <pre>{JSON.stringify(courses, null, 2)}</pre>
 
-      <div style={{ marginTop: 12 }}>
-        <h3>My Enrollments (Students in my Courses)</h3>
-        <pre>{JSON.stringify(enrollments, null, 2)}</pre>
-      </div>
+      <h3>My Enrollments</h3>
+      <pre>{JSON.stringify(enrollments, null, 2)}</pre>
     </div>
   );
-}export {};
+}
 
+// 👇 VERY IMPORTANT for isolatedModules
+export {};

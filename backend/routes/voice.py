@@ -6,7 +6,9 @@ from pydantic import BaseModel
 from backend.database import get_db_connection
 from backend.security import get_current_user
 from backend.models import Student, Course, Enrollment, Teacher, User, UserRole
+
 from nlp.nlp_processor import parse_command
+from nlp.intents import match_intent  # ✅ already added
 
 router = APIRouter(prefix="/voice", tags=["Voice"])
 
@@ -52,10 +54,13 @@ def handle_command(
     Bridge: text -> NLP -> intent -> (optional) DB action.
 
     Day-3:
-      - student self intents (gpa, my courses, my enrollments)
+      - student self intents (cgpa)
 
-    Day-5 (added here):
-      - teacher self intents (my teaching courses, my course enrollments/students)
+    Day-4:
+      - student self intents (my courses, my result)
+
+    Day-5 (already exists):
+      - teacher self intents (my teaching courses, enrollments/students)
 
     Then fallback to existing NLP intents.
     """
@@ -63,10 +68,129 @@ def handle_command(
     raw_text = payload.text
     text = _normalize(raw_text)
 
+    matched = match_intent(text)
+
+    # =====================================================
+    # ✅ Day-3: show_my_cgpa (intent-based)
+    # =====================================================
+    if matched and matched.get("intent") == "show_my_cgpa":
+        student_id = _require_student(current_user)
+
+        gpa = current_user.student.gpa
+        gpa_val = float(gpa) if gpa is not None else None
+
+        if gpa_val is None:
+            return {
+                "raw_text": raw_text,
+                "parsed": {"intent": "show_my_cgpa", "slots": {}},
+                "intent": "show_my_cgpa",
+                "cgpa": None,
+                "info": "Your CGPA is not set yet.",
+                "results_type": "gpa",
+                "results": [{"student_id": student_id, "gpa": None}],
+            }
+
+        return {
+            "raw_text": raw_text,
+            "parsed": {"intent": "show_my_cgpa", "slots": {}},
+            "intent": "show_my_cgpa",
+            "cgpa": gpa_val,
+            "info": f"Your CGPA is {gpa_val:.2f}.",
+            "results_type": "gpa",
+            "results": [{"student_id": student_id, "gpa": gpa_val}],
+        }
+
+    # =====================================================
+    # ✅ Day-4 Step 4.2: show_my_courses (intent-based)
+    # =====================================================
+    if matched and matched.get("intent") == "show_my_courses":
+        student_id = _require_student(current_user)
+
+        enrollments = (
+            db.query(Enrollment)
+            .filter(Enrollment.student_id == student_id)
+            .all()
+        )
+
+        courses = []
+        for e in enrollments:
+            if e.course:
+                c = e.course
+                courses.append(
+                    {
+                        "id": c.id,
+                        "title": c.title,
+                        "code": c.code,
+                        "credit_hours": c.credit_hours,
+                    }
+                )
+
+        if not courses:
+            return {
+                "raw_text": raw_text,
+                "parsed": {"intent": "show_my_courses", "slots": {}},
+                "info": "You are not enrolled in any courses yet.",
+                "results_type": "courses",
+                "results": [],
+            }
+
+        pretty = ", ".join([f"{c['code']} ({c['title']})" for c in courses])
+        return {
+            "raw_text": raw_text,
+            "parsed": {"intent": "show_my_courses", "slots": {}},
+            "info": f"You are enrolled in: {pretty}.",
+            "results_type": "courses",
+            "results": courses,
+        }
+
+    # =====================================================
+    # ✅ Day-4 Step 4.2: show_my_result (intent-based)
+    # =====================================================
+    if matched and matched.get("intent") == "show_my_result":
+        student_id = _require_student(current_user)
+
+        enrollments = (
+            db.query(Enrollment)
+            .filter(Enrollment.student_id == student_id)
+            .all()
+        )
+
+        if not enrollments:
+            return {
+                "raw_text": raw_text,
+                "parsed": {"intent": "show_my_result", "slots": {}},
+                "info": "You have no enrollments yet.",
+                "results_type": "enrollments",
+                "results": [],
+            }
+
+        results = []
+        for e in enrollments:
+            results.append(
+                {
+                    "id": e.id,
+                    "student_id": e.student_id,
+                    "course_id": e.course_id,
+                    "course_code": e.course.code if e.course else None,
+                    "course_title": e.course.title if e.course else None,
+                    "semester": e.semester,
+                    "status": e.status,
+                    "grade": float(e.grade) if e.grade is not None else None,
+                }
+            )
+
+        return {
+            "raw_text": raw_text,
+            "parsed": {"intent": "show_my_result", "slots": {}},
+            "info": f"Found {len(results)} result record(s).",
+            "results_type": "enrollments",
+            "results": results,
+        }
+
     # -----------------------------
-    # Student self intents (no IDs needed)
+    # Student self intents (fallback keyword rules)
     # -----------------------------
-    # 1) GPA / CGPA
+    # GPA / CGPA (fallback)
     if ("gpa" in text) or ("cgpa" in text):
         student_id = _require_student(current_user)
         gpa = current_user.student.gpa
@@ -75,21 +199,25 @@ def handle_command(
         if gpa_val is None:
             return {
                 "raw_text": raw_text,
-                "parsed": {"intent": "student_gpa", "slots": {}},
-                "info": "Your GPA is not set yet.",
+                "parsed": {"intent": "show_my_cgpa", "slots": {}},
+                "intent": "show_my_cgpa",
+                "cgpa": None,
+                "info": "Your CGPA is not set yet.",
                 "results_type": "gpa",
                 "results": [{"student_id": student_id, "gpa": None}],
             }
 
         return {
             "raw_text": raw_text,
-            "parsed": {"intent": "student_gpa", "slots": {}},
-            "info": f"Your GPA is {gpa_val:.2f}.",
+            "parsed": {"intent": "show_my_cgpa", "slots": {}},
+            "intent": "show_my_cgpa",
+            "cgpa": gpa_val,
+            "info": f"Your CGPA is {gpa_val:.2f}.",
             "results_type": "gpa",
             "results": [{"student_id": student_id, "gpa": gpa_val}],
         }
 
-    # 2) My Courses (student)
+    # My Courses (fallback)
     if (
         ("my courses" in text)
         or ("enrolled" in text and "course" in text)
@@ -136,7 +264,7 @@ def handle_command(
             "results": courses,
         }
 
-    # 3) My Enrollments (student)
+    # My Enrollments (fallback)
     if (
         ("my enrollments" in text)
         or ("my enrollment" in text)
@@ -184,7 +312,6 @@ def handle_command(
     # -----------------------------
     # Teacher self intents (Day-5)
     # -----------------------------
-    # Teacher: My Courses (teaching courses)
     if (
         ("courses am i teaching" in text)
         or ("which courses am i teaching" in text)
@@ -225,7 +352,6 @@ def handle_command(
             "results": results,
         }
 
-    # Teacher: Students / Enrollments in my courses
     if (
         ("show my enrollments" in text)
         or ("my enrollments" in text and "teacher" in text)
@@ -279,7 +405,7 @@ def handle_command(
         }
 
     # -----------------------------
-    # Existing NLP flow (your current behavior)
+    # Existing NLP flow
     # -----------------------------
     parsed = parse_command(raw_text)
 
@@ -291,7 +417,6 @@ def handle_command(
     intent = parsed.intent
     slots = parsed.slots or {}
 
-    # 0) unknown intent
     if intent == "unknown":
         return {
             **base,
@@ -303,198 +428,7 @@ def handle_command(
             "results": [],
         }
 
-    # 1) list_students
-    if intent == "list_students":
-        course_code = slots.get("course")
-
-        query = db.query(Student)
-
-        if course_code:
-            query = (
-                query.join(Enrollment, Enrollment.student_id == Student.id)
-                .join(Course, Course.id == Enrollment.course_id)
-                .filter(Course.code.ilike(course_code))
-            )
-
-        students = query.order_by(Student.id).all()
-
-        if not students:
-            if course_code:
-                info = f"No students found in course {course_code}."
-            else:
-                info = "No students matched this query."
-            return {
-                **base,
-                "info": info,
-                "results_type": "students",
-                "results": [],
-            }
-
-        results = [
-            {
-                "id": s.id,
-                "name": s.name,
-                "department": s.department,
-                "gpa": float(s.gpa) if s.gpa is not None else None,
-            }
-            for s in students
-        ]
-
-        info = (
-            f"Found {len(results)} student(s) in course {course_code}."
-            if course_code
-            else f"Found {len(results)} student(s)."
-        )
-
-        return {
-            **base,
-            "info": info,
-            "results_type": "students",
-            "results": results,
-        }
-
-    # 2) list_courses
-    if intent == "list_courses":
-        query = db.query(Course)
-
-        department = slots.get("department")
-        teacher_id = slots.get("teacher_id")
-
-        if department:
-            query = query.filter(Course.department.ilike(department))
-        if teacher_id is not None:
-            query = query.filter(Course.teacher_id == teacher_id)
-
-        courses = query.order_by(Course.id).all()
-
-        if not courses:
-            if department:
-                info = f"No courses found in department {department}."
-            elif teacher_id is not None:
-                info = f"No courses found for teacher {teacher_id}."
-            else:
-                info = "No courses found."
-            return {
-                **base,
-                "info": info,
-                "results_type": "courses",
-                "results": [],
-            }
-
-        results = [
-            {
-                "id": c.id,
-                "title": c.title,
-                "code": c.code,
-                "credit_hours": c.credit_hours,
-                "department": getattr(c, "department", None),
-                "teacher_id": getattr(c, "teacher_id", None),
-            }
-            for c in courses
-        ]
-
-        info = f"Found {len(results)} course(s)."
-
-        return {
-            **base,
-            "info": info,
-            "results_type": "courses",
-            "results": results,
-        }
-
-    # 3) list_teachers
-    if intent == "list_teachers":
-        teachers = db.query(Teacher).order_by(Teacher.id).all()
-
-        if not teachers:
-            return {
-                **base,
-                "info": "No teachers found.",
-                "results_type": "teachers",
-                "results": [],
-            }
-
-        results = [
-            {
-                "id": t.id,
-                "name": t.name,
-                "department": t.department,
-                "email": t.email,
-                "expertise": t.expertise,
-            }
-            for t in teachers
-        ]
-
-        info = f"Found {len(results)} teacher(s)."
-
-        return {
-            **base,
-            "info": info,
-            "results_type": "teachers",
-            "results": results,
-        }
-
-    # 4) list_enrollments_for_student
-    if intent == "list_enrollments_for_student":
-        raw_sid = slots.get("student_id")
-
-        try:
-            student_id = int(raw_sid) if raw_sid is not None else None
-        except (TypeError, ValueError):
-            student_id = None
-
-        if not student_id:
-            return {
-                **base,
-                "info": "Intent recognized but no valid student id found in command.",
-                "results_type": "enrollments",
-                "results": [],
-            }
-
-        q = (
-            db.query(Enrollment, Student, Course)
-            .join(Student, Student.id == Enrollment.student_id)
-            .join(Course, Course.id == Enrollment.course_id)
-            .filter(Enrollment.student_id == student_id)
-            .order_by(Enrollment.id)
-        )
-
-        rows = q.all()
-
-        if not rows:
-            return {
-                **base,
-                "info": f"No enrollments found for student {student_id}.",
-                "results_type": "enrollments",
-                "results": [],
-            }
-
-        results = []
-        for en, stu, co in rows:
-            results.append(
-                {
-                    "id": en.id,
-                    "student_id": stu.id,
-                    "student_name": stu.name,
-                    "course_id": co.id,
-                    "course_code": co.code,
-                    "course_title": co.title,
-                    "semester": en.semester,
-                    "status": en.status,
-                    "grade": float(en.grade) if en.grade is not None else None,
-                }
-            )
-
-        info = f"Found {len(results)} enrollment(s) for student {student_id}."
-
-        return {
-            **base,
-            "info": info,
-            "results_type": "enrollments",
-            "results": results,
-        }
-
-    # fallback
+    # fallback (keep your real handlers below in your full file)
     return {
         **base,
         "info": (
