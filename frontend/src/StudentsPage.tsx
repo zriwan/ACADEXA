@@ -1,20 +1,11 @@
 // src/StudentsPage.tsx
-
 import React, { useEffect, useState } from "react";
-import { api, setAuthToken } from "./api/client";
-import { Student, StudentCreatePayload, TokenResponse } from "./types";
-
-const TOKEN_KEY = "acadexa_token";
-const EMAIL_KEY = "acadexa_email";
+import { api } from "./api/client";
+import { Student, StudentCreatePayload } from "./types";
 
 const StudentsPage: React.FC = () => {
-  // Auth state
-  const [email, setEmail] = useState<string>("");
-  const [password, setPassword] = useState<string>("");
-  const [loggedInAs, setLoggedInAs] = useState<string | null>(null);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const [meEmail, setMeEmail] = useState<string | null>(null);
 
-  // Students state
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -23,99 +14,42 @@ const StudentsPage: React.FC = () => {
     name: "",
     department: "",
     gpa: 0,
+    email: "",
+    password: "",
   });
 
   const [editingId, setEditingId] = useState<number | null>(null);
 
-  // ---- Helpers ----
-  const restoreSession = () => {
-    const token = localStorage.getItem(TOKEN_KEY);
-    const savedEmail = localStorage.getItem(EMAIL_KEY);
-
-    if (token) {
-      setAuthToken(token);
-      if (savedEmail) setLoggedInAs(savedEmail);
-      return true;
-    }
-    return false;
-  };
-
-  const logout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(EMAIL_KEY);
-    setAuthToken(null);
-    setLoggedInAs(null);
-    setEmail("");
-    setPassword("");
-  };
-
-  // ---- Auth ----
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const fetchMe = async () => {
     try {
-      setAuthError(null);
-
-      // ✅ Backend expects x-www-form-urlencoded with keys: username, password
-      const body = new URLSearchParams();
-      body.append("username", email); // email goes into "username"
-      body.append("password", password);
-
-      const res = await api.post<TokenResponse>("/auth/login", body, {
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      });
-
-      const token = res.data.access_token;
-
-      // Persist session
-      localStorage.setItem(TOKEN_KEY, token);
-      localStorage.setItem(EMAIL_KEY, email);
-
-      setAuthToken(token);
-      setLoggedInAs(email);
-
-      // Optional: load students after login
-      await fetchStudents(true);
-    } catch (err: any) {
-      console.error(err);
-      setAuthError("Login failed. Check email/password.");
-      logout();
+      const res = await api.get("/auth/me");
+      setMeEmail(res.data?.email ?? null);
+    } catch {
+      setMeEmail(null);
     }
   };
 
-  // ---- Data ----
-  const fetchStudents = async (silent: boolean = false) => {
+  const fetchStudents = async () => {
     try {
-      if (!silent) {
-        setLoading(true);
-      }
+      setLoading(true);
       setError(null);
-
       const res = await api.get<Student[]>("/students/");
       setStudents(res.data);
     } catch (err: any) {
       console.error(err);
-      setError("Failed to load students (are you logged in?)");
+      setError("Failed to load students (are you logged in / allowed?)");
     } finally {
-      if (!silent) {
-        setLoading(false);
-      }
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    // Try to restore session first
-    const hasSession = restoreSession();
-
-    // Fetch students (will succeed only if token exists)
-    if (hasSession) {
-      fetchStudents();
-    }
+    fetchMe();
+    fetchStudents();
   }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-
     setForm((prev) => ({
       ...prev,
       [name]: name === "gpa" ? Number(value) : value,
@@ -123,36 +57,33 @@ const StudentsPage: React.FC = () => {
   };
 
   const resetForm = () => {
-    setForm({ name: "", department: "", gpa: 0 });
+    setForm({ name: "", department: "", gpa: 0, email: "", password: "" }); // ✅ clear email/password too
     setEditingId(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-   if (!localStorage.getItem("acadexa_token")) {
-  setError("Please login first.");
-  return;
-}
-
-
     try {
       setError(null);
 
       if (editingId === null) {
+        // ✅ CREATE: send full form (includes email/password)
         await api.post<Student>("/students/", form);
       } else {
-        await api.put<Student>(`/students/${editingId}`, form);
+        // ✅ UPDATE: DO NOT send email/password
+        const { name, department, gpa } = form;
+        await api.put<Student>(`/students/${editingId}`, { name, department, gpa });
       }
 
       resetForm();
-      await fetchStudents(true);
+      await fetchStudents();
     } catch (err: any) {
       console.error(err);
       setError(
         editingId === null
-          ? "Failed to create student (maybe not authenticated?)"
-          : "Failed to update student (maybe not authenticated?)"
+          ? "Failed to create student (maybe not allowed?)"
+          : "Failed to update student (maybe not allowed?)"
       );
     }
   };
@@ -162,29 +93,23 @@ const StudentsPage: React.FC = () => {
       name: s.name,
       department: s.department,
       gpa: Number(s.gpa),
+      email: "", // ✅ keep empty in edit mode
+      password: "", // ✅ keep empty in edit mode
     });
     setEditingId(s.id);
     setError(null);
   };
 
   const handleDelete = async (id: number) => {
-   if (!localStorage.getItem("acadexa_token")) {
-  setError("Please login first.");
-  return;
-}
-
-
-    if (!window.confirm("Are you sure you want to delete this student?")) {
-      return;
-    }
+    if (!window.confirm("Are you sure you want to delete this student?")) return;
 
     try {
       setError(null);
       await api.delete(`/students/${id}`);
-      await fetchStudents(true);
+      await fetchStudents();
     } catch (err: any) {
       console.error(err);
-      setError("Failed to delete student (maybe not authenticated?)");
+      setError("Failed to delete student (maybe not allowed?)");
     }
   };
 
@@ -195,53 +120,19 @@ const StudentsPage: React.FC = () => {
         Manage student records, departments, and GPA from a single place.
       </p>
 
-      {/* Login card */}
+      {/* Session */}
       <section className="card">
         <div className="card-header">
-          <h2 className="card-title">Login</h2>
+          <h2 className="card-title">Session</h2>
         </div>
-
         <div className="card-body">
-          {loggedInAs ? (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <p>
-                Logged in as <strong>{loggedInAs}</strong>
-              </p>
-              <button type="button" className="btn btn-secondary" onClick={logout}>
-                Logout
-              </button>
-            </div>
+          {meEmail ? (
+            <p>
+              Logged in as <strong>{meEmail}</strong>
+            </p>
           ) : (
-            <form onSubmit={handleLogin}>
-              <div className="form-row">
-                <label>Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  placeholder="admin@example.com"
-                />
-              </div>
-
-              <div className="form-row">
-                <label>Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  placeholder="••••••••"
-                />
-              </div>
-
-              <button type="submit" className="btn btn-primary">
-                Login
-              </button>
-            </form>
+            <p>Not logged in (or session expired).</p>
           )}
-
-          {authError && <div className="alert alert-error">{authError}</div>}
         </div>
       </section>
 
@@ -254,16 +145,15 @@ const StudentsPage: React.FC = () => {
         </div>
 
         <div className="card-body">
-          {!loggedInAs && (
-            <div className="alert alert-error" style={{ marginBottom: "1rem" }}>
-              Please login to create, update, or delete students.
-            </div>
-          )}
-
           <form onSubmit={handleSubmit}>
             <div className="form-row">
               <label>Name</label>
-              <input name="name" value={form.name} onChange={handleChange} required />
+              <input
+                name="name"
+                value={form.name}
+                onChange={handleChange}
+                required
+              />
             </div>
 
             <div className="form-row">
@@ -290,7 +180,35 @@ const StudentsPage: React.FC = () => {
               />
             </div>
 
-            <button type="submit" className="btn btn-primary" disabled={!loggedInAs}>
+            {/* ✅ Show email/password only when creating */}
+            {editingId === null && (
+              <>
+                <div className="form-row">
+                  <label>Student Email</label>
+                  <input
+                    name="email"
+                    value={form.email || ""}
+                    onChange={handleChange}
+                    placeholder="student@example.com"
+                    required
+                  />
+                </div>
+
+                <div className="form-row">
+                  <label>Student Password</label>
+                  <input
+                    name="password"
+                    type="password"
+                    value={form.password || ""}
+                    onChange={handleChange}
+                    placeholder="min 6 chars"
+                    required
+                  />
+                </div>
+              </>
+            )}
+
+            <button type="submit" className="btn btn-primary">
               {editingId === null ? "Create" : "Update"}
             </button>
 
@@ -313,14 +231,12 @@ const StudentsPage: React.FC = () => {
       {/* List students */}
       <section>
         <div className="card">
-          <div className="card-header" style={{ display: "flex", justifyContent: "space-between" }}>
+          <div
+            className="card-header"
+            style={{ display: "flex", justifyContent: "space-between" }}
+          >
             <h2 className="card-title">All Students</h2>
-            <button
-              className="btn btn-secondary"
-              onClick={() => fetchStudents()}
-              disabled={!loggedInAs}
-              title={!loggedInAs ? "Login required" : "Refresh list"}
-            >
+            <button className="btn btn-secondary" onClick={fetchStudents}>
               Refresh
             </button>
           </div>
@@ -328,13 +244,9 @@ const StudentsPage: React.FC = () => {
           <div className="card-body">
             {loading && <p>Loading...</p>}
 
-            {!loading && !loggedInAs && (
-              <p>Please login to view student records.</p>
-            )}
+            {!loading && students.length === 0 && <p>No students found.</p>}
 
-            {!loading && loggedInAs && students.length === 0 && <p>No students found.</p>}
-
-            {!loading && loggedInAs && students.length > 0 && (
+            {!loading && students.length > 0 && (
               <table className="table">
                 <thead>
                   <tr>
@@ -355,10 +267,16 @@ const StudentsPage: React.FC = () => {
                       <td>{s.gpa}</td>
                       <td>
                         <div className="table-actions">
-                          <button className="btn btn-secondary" onClick={() => startEdit(s)}>
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() => startEdit(s)}
+                          >
                             Edit
                           </button>
-                          <button className="btn btn-danger" onClick={() => handleDelete(s.id)}>
+                          <button
+                            className="btn btn-danger"
+                            onClick={() => handleDelete(s.id)}
+                          >
                             Delete
                           </button>
                         </div>
@@ -368,7 +286,6 @@ const StudentsPage: React.FC = () => {
                 </tbody>
               </table>
             )}
-
           </div>
         </div>
       </section>

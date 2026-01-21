@@ -36,6 +36,12 @@ def _require_teacher(user: User) -> int:
     return user.teacher.id
 
 
+def _require_admin_or_hod(user: User) -> None:
+    role = _role_value(user.role)
+    if role not in (UserRole.admin, UserRole.hod):
+        raise HTTPException(status_code=403, detail="Admin/HOD access required")
+
+
 def _normalize(text: str) -> str:
     return (text or "").strip().lower()
 
@@ -53,16 +59,11 @@ def handle_command(
     """
     Bridge: text -> NLP -> intent -> (optional) DB action.
 
-    Day-3:
-      - student self intents (cgpa)
-
-    Day-4:
-      - student self intents (my courses, my result)
-
-    Day-5 (already exists):
-      - teacher self intents (my teaching courses, enrollments/students)
-
-    Then fallback to existing NLP intents.
+    Already present:
+      - student self intents (cgpa, my courses, my result)
+      - teacher self intents (my teaching courses, enrollments)
+    Now added:
+      - Admin/HOD + role-based list_* intents
     """
 
     raw_text = payload.text
@@ -101,28 +102,19 @@ def handle_command(
         }
 
     # =====================================================
-    # ✅ Day-4 Step 4.2: show_my_courses (intent-based)
+    # ✅ Day-4: show_my_courses (intent-based)
     # =====================================================
     if matched and matched.get("intent") == "show_my_courses":
         student_id = _require_student(current_user)
 
-        enrollments = (
-            db.query(Enrollment)
-            .filter(Enrollment.student_id == student_id)
-            .all()
-        )
+        enrollments = db.query(Enrollment).filter(Enrollment.student_id == student_id).all()
 
         courses = []
         for e in enrollments:
             if e.course:
                 c = e.course
                 courses.append(
-                    {
-                        "id": c.id,
-                        "title": c.title,
-                        "code": c.code,
-                        "credit_hours": c.credit_hours,
-                    }
+                    {"id": c.id, "title": c.title, "code": c.code, "credit_hours": c.credit_hours}
                 )
 
         if not courses:
@@ -144,16 +136,12 @@ def handle_command(
         }
 
     # =====================================================
-    # ✅ Day-4 Step 4.2: show_my_result (intent-based)
+    # ✅ Day-4: show_my_result (intent-based)
     # =====================================================
     if matched and matched.get("intent") == "show_my_result":
         student_id = _require_student(current_user)
 
-        enrollments = (
-            db.query(Enrollment)
-            .filter(Enrollment.student_id == student_id)
-            .all()
-        )
+        enrollments = db.query(Enrollment).filter(Enrollment.student_id == student_id).all()
 
         if not enrollments:
             return {
@@ -188,9 +176,8 @@ def handle_command(
         }
 
     # -----------------------------
-    # Student self intents (fallback keyword rules)
+    # Existing keyword fallbacks (keep)
     # -----------------------------
-    # GPA / CGPA (fallback)
     if ("gpa" in text) or ("cgpa" in text):
         student_id = _require_student(current_user)
         gpa = current_user.student.gpa
@@ -217,100 +204,8 @@ def handle_command(
             "results": [{"student_id": student_id, "gpa": gpa_val}],
         }
 
-    # My Courses (fallback)
-    if (
-        ("my courses" in text)
-        or ("enrolled" in text and "course" in text)
-        or ("courses" in text and "enrolled" in text)
-        or ("subjects" in text)
-        or ("course" in text and "my" in text)
-    ):
-        student_id = _require_student(current_user)
-
-        enrollments = (
-            db.query(Enrollment)
-            .filter(Enrollment.student_id == student_id)
-            .all()
-        )
-
-        courses = []
-        for e in enrollments:
-            if e.course:
-                c = e.course
-                courses.append(
-                    {
-                        "id": c.id,
-                        "title": c.title,
-                        "code": c.code,
-                        "credit_hours": c.credit_hours,
-                    }
-                )
-
-        if not courses:
-            return {
-                "raw_text": raw_text,
-                "parsed": {"intent": "student_courses", "slots": {}},
-                "info": "You are not enrolled in any courses yet.",
-                "results_type": "courses",
-                "results": [],
-            }
-
-        pretty = ", ".join([f"{c['code']} ({c['title']})" for c in courses])
-        return {
-            "raw_text": raw_text,
-            "parsed": {"intent": "student_courses", "slots": {}},
-            "info": f"You are enrolled in: {pretty}.",
-            "results_type": "courses",
-            "results": courses,
-        }
-
-    # My Enrollments (fallback)
-    if (
-        ("my enrollments" in text)
-        or ("my enrollment" in text)
-        or ("enrollments" in text and "my" in text)
-        or ("enrolled" in text and "in" in text)
-    ):
-        student_id = _require_student(current_user)
-
-        enrollments = (
-            db.query(Enrollment)
-            .filter(Enrollment.student_id == student_id)
-            .all()
-        )
-
-        if not enrollments:
-            return {
-                "raw_text": raw_text,
-                "parsed": {"intent": "student_enrollments", "slots": {}},
-                "info": "You have no enrollments yet.",
-                "results_type": "enrollments",
-                "results": [],
-            }
-
-        results = []
-        for e in enrollments:
-            results.append(
-                {
-                    "id": e.id,
-                    "student_id": e.student_id,
-                    "course_id": e.course_id,
-                    "semester": e.semester,
-                    "status": e.status,
-                    "grade": float(e.grade) if e.grade is not None else None,
-                }
-            )
-
-        return {
-            "raw_text": raw_text,
-            "parsed": {"intent": "student_enrollments", "slots": {}},
-            "info": f"You have {len(results)} enrollment(s).",
-            "results_type": "enrollments",
-            "results": results,
-        }
-
     # -----------------------------
-    # Teacher self intents (Day-5)
+    # Teacher self intents (existing)
     # -----------------------------
     if (
         ("courses am i teaching" in text)
@@ -405,15 +300,11 @@ def handle_command(
         }
 
     # -----------------------------
-    # Existing NLP flow
+    # ✅ NLP flow (ADD REAL HANDLERS HERE)
     # -----------------------------
     parsed = parse_command(raw_text)
 
-    base = {
-        "raw_text": raw_text,
-        "parsed": parsed.model_dump(),
-    }
-
+    base = {"raw_text": raw_text, "parsed": parsed.model_dump()}
     intent = parsed.intent
     slots = parsed.slots or {}
 
@@ -428,13 +319,256 @@ def handle_command(
             "results": [],
         }
 
-    # fallback (keep your real handlers below in your full file)
+    # -----------------------------
+    # ✅ NEW: role-based list_* intents
+    # -----------------------------
+    role = _role_value(current_user.role)
+
+    # helper slot getters
+    course_code = (slots.get("course") or slots.get("course_code") or "").strip()
+    raw_sid = slots.get("student_id") or slots.get("student") or None
+
+    # 1) list_teachers (Admin/HOD only)
+    if intent == "list_teachers":
+        _require_admin_or_hod(current_user)
+
+        teachers = db.query(Teacher).order_by(Teacher.id).all()
+        results = [
+            {
+                "id": t.id,
+                "name": getattr(t, "name", None),
+                "department": getattr(t, "department", None),
+                "email": getattr(t, "email", None),
+                "expertise": getattr(t, "expertise", None),
+            }
+            for t in teachers
+        ]
+        return {**base, "info": f"Found {len(results)} teacher(s).", "results_type": "teachers", "results": results}
+
+    # 2) list_courses
+    if intent == "list_courses":
+        # Admin/HOD: all courses
+        if role in (UserRole.admin, UserRole.hod):
+            q = db.query(Course)
+
+            if course_code:
+                q = q.filter(Course.code.ilike(course_code))
+
+            courses = q.order_by(Course.id).all()
+            results = [
+                {
+                    "id": c.id,
+                    "title": c.title,
+                    "code": c.code,
+                    "credit_hours": c.credit_hours,
+                    "teacher_id": c.teacher_id,
+                }
+                for c in courses
+            ]
+            return {**base, "info": f"Found {len(results)} course(s).", "results_type": "courses", "results": results}
+
+        # Teacher: only courses they teach
+        if role == UserRole.teacher:
+            teacher_id = _require_teacher(current_user)
+            q = db.query(Course).filter(Course.teacher_id == teacher_id)
+            if course_code:
+                q = q.filter(Course.code.ilike(course_code))
+            courses = q.order_by(Course.id).all()
+            results = [
+                {"id": c.id, "title": c.title, "code": c.code, "credit_hours": c.credit_hours}
+                for c in courses
+            ]
+            return {**base, "info": f"Found {len(results)} course(s) you teach.", "results_type": "courses", "results": results}
+
+        # Student: only courses they are enrolled in
+        if role == UserRole.student:
+            student_id = _require_student(current_user)
+
+            q = (
+                db.query(Course)
+                .join(Enrollment, Enrollment.course_id == Course.id)
+                .filter(Enrollment.student_id == student_id)
+            )
+            if course_code:
+                q = q.filter(Course.code.ilike(course_code))
+
+            courses = q.order_by(Course.id).all()
+            results = [
+                {"id": c.id, "title": c.title, "code": c.code, "credit_hours": c.credit_hours}
+                for c in courses
+            ]
+            return {**base, "info": f"Found {len(results)} enrolled course(s).", "results_type": "courses", "results": results}
+
+    # 3) list_students
+    if intent == "list_students":
+        # Admin/HOD: all students OR filter by course
+        if role in (UserRole.admin, UserRole.hod):
+            q = db.query(Student)
+
+            if course_code:
+                course = db.query(Course).filter(Course.code.ilike(course_code)).first()
+                if not course:
+                    return {**base, "info": f"No course found with code '{course_code}'.", "results_type": "students", "results": []}
+
+                q = (
+                    db.query(Student)
+                    .join(Enrollment, Enrollment.student_id == Student.id)
+                    .filter(Enrollment.course_id == course.id)
+                )
+
+            students = q.order_by(Student.id).all()
+            results = [
+                {
+                    "id": s.id,
+                    "name": getattr(s, "name", None),
+                    "department": getattr(s, "department", None),
+                    "gpa": float(s.gpa) if getattr(s, "gpa", None) is not None else None,
+                }
+                for s in students
+            ]
+            return {**base, "info": f"Found {len(results)} student(s).", "results_type": "students", "results": results}
+
+        # Teacher: only students in teacher courses (optional filter by course)
+        if role == UserRole.teacher:
+            teacher_id = _require_teacher(current_user)
+
+            q = (
+                db.query(Student, Course, Enrollment)
+                .join(Enrollment, Enrollment.student_id == Student.id)
+                .join(Course, Course.id == Enrollment.course_id)
+                .filter(Course.teacher_id == teacher_id)
+            )
+
+            if course_code:
+                q = q.filter(Course.code.ilike(course_code))
+
+            rows = q.order_by(Student.id).all()
+            results = []
+            for st, co, en in rows:
+                results.append(
+                    {
+                        "student_id": st.id,
+                        "student_name": getattr(st, "name", None),
+                        "course_code": co.code,
+                        "course_title": co.title,
+                        "semester": en.semester,
+                        "status": en.status,
+                        "grade": float(en.grade) if en.grade is not None else None,
+                    }
+                )
+            return {**base, "info": f"Found {len(results)} student record(s) in your courses.", "results_type": "students", "results": results}
+
+        # Student: not allowed
+        raise HTTPException(status_code=403, detail="You are not allowed to list all students")
+
+    # 4) list_enrollments_for_student
+    if intent == "list_enrollments_for_student":
+        # student_id parsing
+        try:
+            student_id = int(raw_sid) if raw_sid is not None else None
+        except (TypeError, ValueError):
+            student_id = None
+
+        # Student: allow only self (if id missing -> self)
+        if role == UserRole.student:
+            my_id = _require_student(current_user)
+            if student_id is None:
+                student_id = my_id
+            if student_id != my_id:
+                raise HTTPException(status_code=403, detail="You can only view your own enrollments")
+
+            rows = (
+                db.query(Enrollment, Course)
+                .join(Course, Course.id == Enrollment.course_id)
+                .filter(Enrollment.student_id == student_id)
+                .order_by(Enrollment.id)
+                .all()
+            )
+
+            results = []
+            for en, co in rows:
+                results.append(
+                    {
+                        "id": en.id,
+                        "student_id": en.student_id,
+                        "course_code": co.code,
+                        "course_title": co.title,
+                        "semester": en.semester,
+                        "status": en.status,
+                        "grade": float(en.grade) if en.grade is not None else None,
+                    }
+                )
+            return {**base, "info": f"Found {len(results)} enrollment(s).", "results_type": "enrollments", "results": results}
+
+        # Admin/HOD: allow any student
+        if role in (UserRole.admin, UserRole.hod):
+            if not student_id:
+                return {**base, "info": "Please specify a valid student id.", "results_type": "enrollments", "results": []}
+
+            rows = (
+                db.query(Enrollment, Student, Course)
+                .join(Student, Student.id == Enrollment.student_id)
+                .join(Course, Course.id == Enrollment.course_id)
+                .filter(Enrollment.student_id == student_id)
+                .order_by(Enrollment.id)
+                .all()
+            )
+
+            results = []
+            for en, st, co in rows:
+                results.append(
+                    {
+                        "id": en.id,
+                        "student_id": st.id,
+                        "student_name": getattr(st, "name", None),
+                        "course_code": co.code,
+                        "course_title": co.title,
+                        "semester": en.semester,
+                        "status": en.status,
+                        "grade": float(en.grade) if en.grade is not None else None,
+                    }
+                )
+            return {**base, "info": f"Found {len(results)} enrollment(s) for student {student_id}.", "results_type": "enrollments", "results": results}
+
+        # Teacher: allow only if student is in teacher's courses
+        if role == UserRole.teacher:
+            teacher_id = _require_teacher(current_user)
+            if not student_id:
+                return {**base, "info": "Please specify a valid student id.", "results_type": "enrollments", "results": []}
+
+            rows = (
+                db.query(Enrollment, Course, Student)
+                .join(Course, Course.id == Enrollment.course_id)
+                .join(Student, Student.id == Enrollment.student_id)
+                .filter(Course.teacher_id == teacher_id)
+                .filter(Enrollment.student_id == student_id)
+                .order_by(Enrollment.id)
+                .all()
+            )
+
+            results = []
+            for en, co, st in rows:
+                results.append(
+                    {
+                        "id": en.id,
+                        "student_id": st.id,
+                        "student_name": getattr(st, "name", None),
+                        "course_code": co.code,
+                        "course_title": co.title,
+                        "semester": en.semester,
+                        "status": en.status,
+                        "grade": float(en.grade) if en.grade is not None else None,
+                    }
+                )
+
+            return {**base, "info": f"Found {len(results)} enrollment(s) for student {student_id} in your courses.", "results_type": "enrollments", "results": results}
+
+    # -----------------------------
+    # FINAL fallback
+    # -----------------------------
     return {
         **base,
-        "info": (
-            "NLP parsed your command, but no concrete action is implemented "
-            "for this intent yet."
-        ),
+        "info": "NLP parsed your command, but no concrete action is implemented for this intent yet.",
         "results_type": None,
         "results": [],
     }

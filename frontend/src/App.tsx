@@ -101,14 +101,14 @@ function App() {
   const isTeacher = role === "teacher";
   const isHod = role === "hod";
 
+  // ✅ Admin OR HOD
+  const canManageDepartment = isAdmin || isHod;
+
   // =========================
   // ✅ FINAL LOGOUT (CORRECT)
   // =========================
   const handleLogout = () => {
-    // THIS LINE FIXES EVERYTHING
     setAuthToken(null); // removes acadexa_token + axios header
-
-    // reset frontend state
     setMe(null);
     setTab("voice");
   };
@@ -153,8 +153,8 @@ function App() {
             </button>
           )}
 
-          {/* ADMIN */}
-          {isAdmin && (
+          {/* ✅ ADMIN OR HOD TABS (Students/Teachers/Courses/Enrollments/Analytics) */}
+          {canManageDepartment && (
             <>
               <button
                 onClick={() => setTab("students")}
@@ -162,18 +162,21 @@ function App() {
               >
                 Students
               </button>
+
               <button
                 onClick={() => setTab("teachers")}
                 className={"nav-button" + (tab === "teachers" ? " active" : "")}
               >
                 Teachers
               </button>
+
               <button
                 onClick={() => setTab("courses")}
                 className={"nav-button" + (tab === "courses" ? " active" : "")}
               >
                 Courses
               </button>
+
               <button
                 onClick={() => setTab("enrollments")}
                 className={
@@ -182,6 +185,7 @@ function App() {
               >
                 Enrollments
               </button>
+
               <button
                 onClick={() => setTab("analytics")}
                 className={
@@ -193,7 +197,7 @@ function App() {
             </>
           )}
 
-          {/* VOICE */}
+          {/* VOICE (everyone) */}
           <button
             onClick={() => setTab("voice")}
             className={"nav-button" + (tab === "voice" ? " active" : "")}
@@ -236,12 +240,12 @@ function App() {
         {/* HOD */}
         {tab === "hod_home" && isHod && <HODHome />}
 
-        {/* ADMIN */}
-        {tab === "students" && isAdmin && <StudentsPage />}
-        {tab === "teachers" && isAdmin && <TeachersPage />}
-        {tab === "courses" && isAdmin && <CoursesPage />}
-        {tab === "enrollments" && isAdmin && <EnrollmentsPage />}
-        {tab === "analytics" && isAdmin && <AnalyticsPage />}
+        {/* ✅ ADMIN OR HOD PAGES */}
+        {tab === "students" && canManageDepartment && <StudentsPage />}
+        {tab === "teachers" && canManageDepartment && <TeachersPage />}
+        {tab === "courses" && canManageDepartment && <CoursesPage />}
+        {tab === "enrollments" && canManageDepartment && <EnrollmentsPage />}
+        {tab === "analytics" && canManageDepartment && <AnalyticsPage />}
 
         {/* VOICE */}
         {tab === "voice" && <VoiceConsolePage />}

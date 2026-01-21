@@ -9,10 +9,13 @@ const API_BASE =
 
 export const api = axios.create({
   baseURL: API_BASE,
+  timeout: 10000, // ✅ FIX 1: prevent infinite loading (10 seconds)
 });
 
 // Set/remove token manually (used after login/logout)
 export function setAuthToken(token: string | null) {
+  const prevToken = localStorage.getItem(TOKEN_KEY); // ✅ track previous
+
   if (token) {
     api.defaults.headers.common["Authorization"] = `Bearer ${token}`;
     localStorage.setItem(TOKEN_KEY, token);
@@ -21,11 +24,14 @@ export function setAuthToken(token: string | null) {
     localStorage.removeItem(TOKEN_KEY);
   }
 
-  // ✅ Notify same-tab listeners (Analytics, Voice, etc.)
-  window.dispatchEvent(new Event("acadexa-auth-changed"));
+  // ✅ Only notify if token actually changed
+  const nextToken = token ?? null;
+  const prev = prevToken ?? null;
+
+  if (prev !== nextToken) {
+    window.dispatchEvent(new Event("acadexa-auth-changed"));
+  }
 }
-
-
 
 // ✅ Always attach token for every request (Analytics, Voice, etc.)
 api.interceptors.request.use((config) => {

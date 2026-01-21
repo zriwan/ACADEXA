@@ -15,6 +15,10 @@ class StudentCreate(BaseModel):
     department: str
     gpa: Decimal
 
+    # ✅ NEW: create login account for student
+    email: EmailStr | None = None
+    password: str | None = Field(default=None, min_length=6, max_length=128)
+
 
 class StudentUpdate(BaseModel):
     name: str

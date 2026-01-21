@@ -1,18 +1,17 @@
+# backend/routes/students.py
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from backend.models import Student, User, UserRole, Enrollment
 
 from backend.database import get_db_connection
-from backend.models import Student, User, UserRole
-from backend.schemas import (
-    StudentCreate,
-    StudentResponse,
-    StudentUpdate,
-)
-
-from ..security import get_current_user, require_admin  # ✅ auth guards
+from backend.models import Student, User, UserRole, Enrollment
+from backend.schemas import StudentCreate, StudentResponse, StudentUpdate
+from backend.security import get_current_user, require_admin, hash_password
 
 router = APIRouter(prefix="/students", tags=["Students"])
+
+
+def _role_value(role):
+    return role.value if hasattr(role, "value") else role
 
 
 # -----------------------------
@@ -24,15 +23,13 @@ def get_my_student_profile(
     db: Session = Depends(get_db_connection),
     current_user: User = Depends(get_current_user),
 ):
-    # ✅ Only students can access
-    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    role_value = _role_value(current_user.role)
     if role_value != UserRole.student:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Student access required",
         )
 
-    # ✅ Must be linked to a Student row (students.user_id = users.id)
     if not current_user.student:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -49,14 +46,48 @@ def get_my_student_profile(
 def add_student(
     payload: StudentCreate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),  # ✅ login required
+    current_user: User = Depends(get_current_user),  # ✅ login required
 ):
     """
     Create a new student.
-    Uses StudentCreate schema (name, department, gpa, etc.).
+
+    ✅ If email+password provided -> create User(role=student) and link Student.user_id
     """
+    role_value = _role_value(current_user.role)
+
+    # ✅ allow admin + hod (change to admin-only if you want)
+    if role_value not in (UserRole.admin, UserRole.hod):
+        raise HTTPException(status_code=403, detail="Admin/HOD access required")
+
     data = payload.model_dump()
+    email = data.pop("email", None)
+    password = data.pop("password", None)
+
+    # if one is provided, both must be provided
+    if (email and not password) or (password and not email):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide both email and password to create student login",
+        )
+
+    user = None
+    if email and password:
+        existing = db.query(User).filter(User.email == email).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+        user = User(
+            name=data["name"],
+            email=email,
+            hashed_password=hash_password(password),
+            role=UserRole.student,
+        )
+        db.add(user)
+        db.flush()  # ✅ gets user.id before commit
+
     s = Student(**data)
+    if user:
+        s.user_id = user.id  # ✅ link student -> user
 
     db.add(s)
     db.commit()
@@ -74,16 +105,13 @@ def list_students(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db_connection),
+    current_user: User = Depends(get_current_user),  # ✅ login required
 ):
-    """
-    List students with optional filters.
+    # ✅ admin/hod only
+    role_value = _role_value(current_user.role)
+    if role_value not in (UserRole.admin, UserRole.hod):
+        raise HTTPException(status_code=403, detail="Admin/HOD access required")
 
-    Query params:
-    - department: exact match filter
-    - name_contains: case-insensitive search on name
-    - skip: pagination offset
-    - limit: pagination page size
-    """
     q = db.query(Student)
 
     if department:
@@ -102,12 +130,13 @@ def list_students(
 def get_student(
     student_id: int,
     db: Session = Depends(get_db_connection),
+    current_user: User = Depends(get_current_user),  # ✅ login required
 ):
-    """
-    Get single student by numeric ID.
-    """
-    student = db.get(Student, student_id)
+    role_value = _role_value(current_user.role)
+    if role_value not in (UserRole.admin, UserRole.hod):
+        raise HTTPException(status_code=403, detail="Admin/HOD access required")
 
+    student = db.get(Student, student_id)
     if not student:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -125,13 +154,12 @@ def update_student(
     student_id: int,
     payload: StudentUpdate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),  # ✅ login required
+    current_user: User = Depends(get_current_user),  # ✅ login required
 ):
-    """
-    Update existing student.
-    Uses StudentUpdate schema.
-    - partial update: only fields provided will be updated.
-    """
+    role_value = _role_value(current_user.role)
+    if role_value not in (UserRole.admin, UserRole.hod):
+        raise HTTPException(status_code=403, detail="Admin/HOD access required")
+
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(
@@ -158,10 +186,6 @@ def delete_student(
     db: Session = Depends(get_db_connection),
     _=Depends(require_admin),  # ✅ admin-only
 ):
-    """
-    Delete a student by ID.
-    Admin-only operation.
-    """
     student = db.get(Student, student_id)
     if not student:
         raise HTTPException(
@@ -182,8 +206,7 @@ def get_my_gpa(
     db: Session = Depends(get_db_connection),
     current_user: User = Depends(get_current_user),
 ):
-    # role check
-    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    role_value = _role_value(current_user.role)
     if role_value != UserRole.student:
         raise HTTPException(status_code=403, detail="Student access required")
 
@@ -195,6 +218,7 @@ def get_my_gpa(
         "gpa": float(current_user.student.gpa) if current_user.student.gpa is not None else None,
     }
 
+
 # -----------------------------
 # /students/me/courses
 # -----------------------------
@@ -203,7 +227,7 @@ def get_my_courses(
     db: Session = Depends(get_db_connection),
     current_user: User = Depends(get_current_user),
 ):
-    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    role_value = _role_value(current_user.role)
     if role_value != UserRole.student:
         raise HTTPException(status_code=403, detail="Student access required")
 
@@ -219,17 +243,21 @@ def get_my_courses(
     courses = []
     for e in enrollments:
         if e.course:
-            courses.append({
-                "course_id": e.course.id,
-                "title": e.course.title,
-                "code": e.course.code,
-                "credit_hours": e.course.credit_hours,
-            })
+            courses.append(
+                {
+                    "course_id": e.course.id,
+                    "title": e.course.title,
+                    "code": e.course.code,
+                    "credit_hours": e.course.credit_hours,
+                }
+            )
 
     return {
         "student_id": current_user.student.id,
         "courses": courses,
     }
+
+
 # -----------------------------
 # /students/me/enrollments
 # -----------------------------
@@ -238,7 +266,7 @@ def get_my_enrollments(
     db: Session = Depends(get_db_connection),
     current_user: User = Depends(get_current_user),
 ):
-    role_value = current_user.role.value if hasattr(current_user.role, "value") else current_user.role
+    role_value = _role_value(current_user.role)
     if role_value != UserRole.student:
         raise HTTPException(status_code=403, detail="Student access required")
 

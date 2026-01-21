@@ -12,6 +12,10 @@ export interface StudentCreatePayload {
   name: string;
   department: string;
   gpa: number;
+
+  // ✅ NEW (optional)
+  email?: string;
+  password?: string;
 }
 
 // ---- Auth ----
@@ -68,4 +72,14 @@ export interface EnrollmentPayload {
   semester?: string;
   status?: string;
   grade?: number | null;
+}
+
+
+export type UserRole = "admin" | "student" | "teacher" | "hod" | "user";
+
+export interface MeResponse {
+  id: number;
+  name: string;
+  email: string;
+  role: UserRole;
 }
