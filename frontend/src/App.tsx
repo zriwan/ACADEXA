@@ -13,6 +13,11 @@ import LoginBox from "./LoginBox";
 import StudentHome from "./StudentHome";
 import TeacherHome from "./TeacherHome";
 import HODHome from "./HODHome";
+import TeacherAttendancePage from "./TeacherAttendancePage";
+import StudentAttendancePage from "./StudentAttendancePage";
+
+// ✅ NEW
+import AdminFeesPage from "./AdminFeesPage";
 
 type Me = {
   id: number;
@@ -22,7 +27,6 @@ type Me = {
   student_id?: number | null;
   teacher_id?: number | null;
 };
-
 type Tab =
   | "students"
   | "teachers"
@@ -32,16 +36,16 @@ type Tab =
   | "voice"
   | "student_home"
   | "teacher_home"
-  | "hod_home";
+  | "hod_home"
+  |"fees"
+  | "teacher_attendance"
+  | "student_attendance";
 
 function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [meLoading, setMeLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("voice");
 
-  // =========================
-  // LOAD CURRENT USER
-  // =========================
   async function loadMe() {
     try {
       const res = await api.get("/auth/me");
@@ -66,27 +70,18 @@ function App() {
 
     const onAuthChanged = () => loadMe();
     window.addEventListener("acadexa-auth-changed", onAuthChanged);
-    return () =>
-      window.removeEventListener("acadexa-auth-changed", onAuthChanged);
+    return () => window.removeEventListener("acadexa-auth-changed", onAuthChanged);
   }, []);
 
-  if (meLoading) {
-    return <div style={{ padding: 16 }}>Loading...</div>;
-  }
+  if (meLoading) return <div style={{ padding: 16 }}>Loading...</div>;
 
-  // =========================
-  // NOT LOGGED IN
-  // =========================
   if (!me) {
     return (
       <div className="app-shell">
         <header className="navbar">
           <div className="navbar-brand">ACADEXA</div>
-          <div style={{ marginLeft: "auto", paddingRight: 12 }}>
-            Not logged in
-          </div>
+          <div style={{ marginLeft: "auto", paddingRight: 12 }}>Not logged in</div>
         </header>
-
         <main style={{ padding: 16 }}>
           <LoginBox onLoggedIn={loadMe} />
         </main>
@@ -104,11 +99,8 @@ function App() {
   // ✅ Admin OR HOD
   const canManageDepartment = isAdmin || isHod;
 
-  // =========================
-  // ✅ FINAL LOGOUT (CORRECT)
-  // =========================
   const handleLogout = () => {
-    setAuthToken(null); // removes acadexa_token + axios header
+    setAuthToken(null);
     setMe(null);
     setTab("voice");
   };
@@ -119,31 +111,24 @@ function App() {
         <div className="navbar-brand">ACADEXA</div>
 
         <nav className="navbar-tabs">
-          {/* STUDENT */}
           {isStudent && (
             <button
               onClick={() => setTab("student_home")}
-              className={
-                "nav-button" + (tab === "student_home" ? " active" : "")
-              }
+              className={"nav-button" + (tab === "student_home" ? " active" : "")}
             >
               My Dashboard
             </button>
           )}
 
-          {/* TEACHER */}
           {isTeacher && (
             <button
               onClick={() => setTab("teacher_home")}
-              className={
-                "nav-button" + (tab === "teacher_home" ? " active" : "")
-              }
+              className={"nav-button" + (tab === "teacher_home" ? " active" : "")}
             >
               My Dashboard
             </button>
           )}
 
-          {/* HOD */}
           {isHod && (
             <button
               onClick={() => setTab("hod_home")}
@@ -153,7 +138,6 @@ function App() {
             </button>
           )}
 
-          {/* ✅ ADMIN OR HOD TABS (Students/Teachers/Courses/Enrollments/Analytics) */}
           {canManageDepartment && (
             <>
               <button
@@ -179,25 +163,28 @@ function App() {
 
               <button
                 onClick={() => setTab("enrollments")}
-                className={
-                  "nav-button" + (tab === "enrollments" ? " active" : "")
-                }
+                className={"nav-button" + (tab === "enrollments" ? " active" : "")}
               >
                 Enrollments
               </button>
 
               <button
                 onClick={() => setTab("analytics")}
-                className={
-                  "nav-button" + (tab === "analytics" ? " active" : "")
-                }
+                className={"nav-button" + (tab === "analytics" ? " active" : "")}
               >
                 Analytics
+              </button>
+
+              {/* ✅ NEW: Fees (Admin/HOD) */}
+              <button
+                onClick={() => setTab("fees")}
+                className={"nav-button" + (tab === "fees" ? " active" : "")}
+              >
+                Fees
               </button>
             </>
           )}
 
-          {/* VOICE (everyone) */}
           <button
             onClick={() => setTab("voice")}
             className={"nav-button" + (tab === "voice" ? " active" : "")}
@@ -206,7 +193,6 @@ function App() {
           </button>
         </nav>
 
-        {/* USER INFO + LOGOUT */}
         <div
           style={{
             marginLeft: "auto",
@@ -220,35 +206,33 @@ function App() {
             {me.email} ({role})
           </span>
 
-          <button
-            className="btn btn-secondary"
-            type="button"
-            onClick={handleLogout}
-          >
+          <button className="btn btn-secondary" type="button" onClick={handleLogout}>
             Logout
           </button>
         </div>
       </header>
 
       <main>
-        {/* STUDENT */}
         {tab === "student_home" && isStudent && <StudentHome />}
-
-        {/* TEACHER */}
         {tab === "teacher_home" && isTeacher && <TeacherHome />}
-
-        {/* HOD */}
         {tab === "hod_home" && isHod && <HODHome />}
 
-        {/* ✅ ADMIN OR HOD PAGES */}
         {tab === "students" && canManageDepartment && <StudentsPage />}
         {tab === "teachers" && canManageDepartment && <TeachersPage />}
         {tab === "courses" && canManageDepartment && <CoursesPage />}
         {tab === "enrollments" && canManageDepartment && <EnrollmentsPage />}
         {tab === "analytics" && canManageDepartment && <AnalyticsPage />}
 
-        {/* VOICE */}
+        
+        {tab === "teacher_attendance" && isTeacher && <TeacherAttendancePage />}
+        {tab === "student_attendance" && isStudent && <StudentAttendancePage />}
+
+
+        {/* ✅ NEW */}
+        {tab === "fees" && canManageDepartment && <AdminFeesPage />}
+
         {tab === "voice" && <VoiceConsolePage />}
+
       </main>
     </div>
   );

@@ -15,6 +15,7 @@ from backend.routes.analytics import router as analytics_router
 from backend.routes.admin import router as admin_router
 from backend.routes.voice import router as voice_router
 
+from backend.routes import assessments, fees
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -71,9 +72,13 @@ app.include_router(enrollments_router)
 app.include_router(analytics_router)
 app.include_router(admin_router)
 app.include_router(voice_router)
+app.include_router(assessments.router)
+app.include_router(fees.router)
 
 
 
 @app.get("/")
 def root():
     return {"message": "Acadexa Backend Connected Successfully!"}
+
+

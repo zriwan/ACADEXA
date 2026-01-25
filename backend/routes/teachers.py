@@ -2,18 +2,94 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import Optional
 
+from pydantic import BaseModel, EmailStr
+import secrets
+
 from backend.database import get_db_connection
 from backend.models import Teacher, Course, Enrollment, Student, User, UserRole
 from backend.schemas import TeacherCreate, TeacherUpdate, TeacherResponse
 
 # ✅ auth dependencies
-from ..security import get_current_user, require_admin
+from ..security import get_current_user, require_admin, hash_password
 
 router = APIRouter(prefix="/teachers", tags=["Teachers"])
 
 
+# =============================
+# ✅ NEW: Admin creates teacher account (User + Teacher) with temp password
+# =============================
+class TeacherAccountCreate(BaseModel):
+    name: str
+    department: str
+    email: EmailStr
+    expertise: str | None = None
+    password: str | None = None  # optional: admin can set, else auto-generate
+
+
+class TeacherAccountCreated(BaseModel):
+    teacher_id: int
+    user_id: int
+    email: EmailStr
+    temp_password: str
+
+
+@router.post("/create-account", response_model=TeacherAccountCreated, status_code=status.HTTP_201_CREATED)
+def create_teacher_account(
+    payload: TeacherAccountCreate,
+    db: Session = Depends(get_db_connection),
+    _admin: User = Depends(require_admin),  # ✅ admin-only
+):
+    """
+    Admin creates teacher login account + teacher profile.
+    Returns temp_password (only once) so admin can give it to teacher.
+    """
+
+    # 1) email unique in users
+    existing_user = db.query(User).filter(User.email == payload.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User with this email already exists")
+
+    # 2) email unique in teachers
+    existing_teacher = db.query(Teacher).filter(Teacher.email == payload.email).first()
+    if existing_teacher:
+        raise HTTPException(status_code=400, detail="Teacher with this email already exists")
+
+    # 3) temp password
+    temp_password = payload.password or secrets.token_urlsafe(10)
+
+    # 4) create user (login)
+    user = User(
+        name=payload.name,
+        email=payload.email,
+        hashed_password=hash_password(temp_password),
+        role=UserRole.teacher,
+    )
+    db.add(user)
+    db.flush()  # get user.id without commit
+
+    # 5) create teacher profile linked to user
+    teacher = Teacher(
+        name=payload.name,
+        department=payload.department,
+        email=payload.email,
+        expertise=payload.expertise,
+        user_id=user.id,
+    )
+    db.add(teacher)
+
+    db.commit()
+    db.refresh(teacher)
+
+    return TeacherAccountCreated(
+        teacher_id=teacher.id,
+        user_id=user.id,
+        email=user.email,
+        temp_password=temp_password,
+    )
+
+
 # -----------------------------
-# /teachers/me → current teacher profile (Day-4 Step-2)
+# /teachers/me → current teacher profile
 # IMPORTANT: keep this ABOVE "/{teacher_id}" route
 # -----------------------------
 @router.get("/me", response_model=TeacherResponse)
@@ -32,7 +108,7 @@ def get_my_teacher_profile(
 
 
 # -----------------------------
-# /teachers/me/courses (Day-4 Step-3)
+# /teachers/me/courses
 # -----------------------------
 @router.get("/me/courses")
 def get_my_courses_as_teacher(
@@ -70,7 +146,7 @@ def get_my_courses_as_teacher(
 
 
 # -----------------------------
-# /teachers/me/enrollments (Day-4 Step-4)
+# /teachers/me/enrollments
 # teacher ki courses ke students/enrollments list
 # -----------------------------
 @router.get("/me/enrollments")
@@ -116,17 +192,17 @@ def get_my_enrollments_as_teacher(
 
 
 # ---------------------------
-# CREATE — add teacher
+# CREATE — add teacher (admin-only)
 # ---------------------------
 @router.post("/", response_model=TeacherResponse, status_code=status.HTTP_201_CREATED)
 def create_teacher(
     payload: TeacherCreate,
     db: Session = Depends(get_db_connection),
-    _=Depends(get_current_user),   # ✅ login required
+    _=Depends(require_admin),   # ✅ admin-only
 ):
     """
-    Create a new teacher.
-    Enforces unique email.
+    Create a new teacher profile (NO LOGIN ACCOUNT).
+    Prefer using /teachers/create-account for teacher login account.
     """
     exists = db.query(Teacher).filter(Teacher.email == payload.email).first()
     if exists:
@@ -223,7 +299,7 @@ def update_teacher(
 
 
 # ------------
-# DELETE — by id
+# DELETE — by id (admin-only)
 # ------------
 @router.delete("/{teacher_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_teacher(

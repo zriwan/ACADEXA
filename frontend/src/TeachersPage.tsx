@@ -1,19 +1,36 @@
 // src/TeachersPage.tsx
-
 import React, { useEffect, useState } from "react";
 import { api } from "./api/client";
-import { Teacher, TeacherPayload } from "./types";
+import { Teacher } from "./types";
+
+type TeacherForm = {
+  name: string;
+  department: string;
+  email: string;
+  expertise?: string;
+  password?: string; // ✅ NEW
+};
+
+type CreateAccountRes = {
+  teacher_id: number;
+  user_id: number;
+  email: string;
+  temp_password: string;
+};
 
 const TeachersPage: React.FC = () => {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [form, setForm] = useState<TeacherPayload>({
+  const [createdInfo, setCreatedInfo] = useState<CreateAccountRes | null>(null);
+
+  const [form, setForm] = useState<TeacherForm>({
     name: "",
     department: "",
     email: "",
     expertise: "",
+    password: "",
   });
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -50,30 +67,53 @@ const TeachersPage: React.FC = () => {
       department: "",
       email: "",
       expertise: "",
+      password: "",
     });
     setEditingId(null);
+    setCreatedInfo(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       setError(null);
+      setCreatedInfo(null);
 
       if (editingId === null) {
-        await api.post<Teacher>("/teachers/", form);
+        // ✅ CREATE TEACHER ACCOUNT (User + Teacher)
+        const payload = {
+          name: form.name,
+          department: form.department,
+          email: form.email,
+          expertise: form.expertise || null,
+          password: form.password || null, // admin-set OR null
+        };
+
+        const res = await api.post<CreateAccountRes>("/teachers/create-account", payload);
+        setCreatedInfo(res.data);
       } else {
-        await api.put<Teacher>(`/teachers/${editingId}`, form);
+        // ✅ EDIT TEACHER PROFILE ONLY
+        const payload = {
+          name: form.name,
+          department: form.department,
+          email: form.email,
+          expertise: form.expertise || null,
+        };
+        await api.put<Teacher>(`/teachers/${editingId}`, payload);
       }
 
-      resetForm();
+      // refresh list
       await fetchTeachers();
+
+      // keep createdInfo visible; only reset inputs (not createdInfo)
+      if (editingId !== null) resetForm();
+      else {
+        setForm((p) => ({ ...p, password: "" }));
+      }
     } catch (err: any) {
       console.error(err);
-      setError(
-        editingId === null
-          ? "Failed to create teacher (maybe not authenticated?)"
-          : "Failed to update teacher (maybe not authenticated?)"
-      );
+      const detail = err?.response?.data?.detail || "Request failed";
+      setError(typeof detail === "string" ? detail : JSON.stringify(detail));
     }
   };
 
@@ -83,9 +123,11 @@ const TeachersPage: React.FC = () => {
       department: t.department,
       email: t.email,
       expertise: t.expertise ?? "",
+      password: "", // not used in edit
     });
     setEditingId(t.id);
     setError(null);
+    setCreatedInfo(null);
   };
 
   const handleDelete = async (id: number) => {
@@ -105,75 +147,78 @@ const TeachersPage: React.FC = () => {
   return (
     <div>
       <h1 className="page-title">Teachers</h1>
-      <p className="page-subtitle">
-        Maintain teacher profiles, departments, and contact details.
-      </p>
+      <p className="page-subtitle">Create teacher login + manage teacher profiles.</p>
 
       {/* Form card */}
       <section className="card">
         <div className="card-header">
           <h2 className="card-title">
-            {editingId === null ? "Add Teacher" : `Edit Teacher #${editingId}`}
+            {editingId === null ? "Add Teacher Account" : `Edit Teacher #${editingId}`}
           </h2>
         </div>
+
         <div className="card-body">
           <form onSubmit={handleSubmit}>
             <div className="form-row">
               <label>Name</label>
-              <input
-                name="name"
-                value={form.name}
-                onChange={handleChange}
-                required
-              />
+              <input name="name" value={form.name} onChange={handleChange} required />
             </div>
 
             <div className="form-row">
               <label>Department</label>
-              <input
-                name="department"
-                value={form.department}
-                onChange={handleChange}
-                required
-              />
+              <input name="department" value={form.department} onChange={handleChange} required />
             </div>
 
             <div className="form-row">
               <label>Email</label>
-              <input
-                type="email"
-                name="email"
-                value={form.email}
-                onChange={handleChange}
-                required
-              />
+              <input type="email" name="email" value={form.email} onChange={handleChange} required />
             </div>
 
             <div className="form-row">
               <label>Expertise</label>
-              <input
-                name="expertise"
-                value={form.expertise ?? ""}
-                onChange={handleChange}
-              />
+              <input name="expertise" value={form.expertise ?? ""} onChange={handleChange} />
             </div>
 
-            <button type="submit" className="btn btn-primary">
-              {editingId === null ? "Create" : "Update"}
-            </button>
-            {editingId !== null && (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ marginLeft: "0.5rem" }}
-                onClick={resetForm}
-              >
-                Cancel
-              </button>
+            {/* ✅ NEW: password only on CREATE */}
+            {editingId === null && (
+              <div className="form-row">
+                <label>Teacher Password</label>
+                <input
+                  type="text"
+                  name="password"
+                  value={form.password ?? ""}
+                  onChange={handleChange}
+                  placeholder="Set password (or leave empty to auto-generate)"
+                />
+              </div>
             )}
+
+            <button type="submit" className="btn btn-primary">
+              {editingId === null ? "Create Teacher Account" : "Update"}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ marginLeft: "0.5rem" }}
+              onClick={resetForm}
+            >
+              {editingId === null ? "Clear" : "Cancel"}
+            </button>
           </form>
 
-          {error && <div className="alert alert-error">{error}</div>}
+          {createdInfo && (
+            <div className="alert" style={{ marginTop: 12 }}>
+              ✅ Teacher created: <b>{createdInfo.email}</b> <br />
+              Teacher ID: <b>{createdInfo.teacher_id}</b>, User ID: <b>{createdInfo.user_id}</b> <br />
+              Password: <b>{createdInfo.temp_password}</b> <br />
+              <span style={{ color: "#666" }}>
+                (Copy this password and share with teacher for login)
+              </span>
+            </div>
+          )}
+
+          {error && <div className="alert alert-error" style={{ marginTop: 12 }}>{error}</div>}
         </div>
       </section>
 
@@ -207,16 +252,10 @@ const TeachersPage: React.FC = () => {
                     <td>{t.expertise}</td>
                     <td>
                       <div className="table-actions">
-                        <button
-                          className="btn btn-secondary"
-                          onClick={() => startEdit(t)}
-                        >
+                        <button className="btn btn-secondary" onClick={() => startEdit(t)}>
                           Edit
                         </button>
-                        <button
-                          className="btn btn-danger"
-                          onClick={() => handleDelete(t.id)}
-                        >
+                        <button className="btn btn-danger" onClick={() => handleDelete(t.id)}>
                           Delete
                         </button>
                       </div>
