@@ -1,4 +1,4 @@
-// src/TeacherHome.tsx
+// frontend/src/TeacherHome.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api/client";
 
@@ -47,6 +47,25 @@ type BulkScoreRow = {
   obtained_marks: number;
 };
 
+/** ✅ Attendance Types */
+type AttendanceSession = {
+  id: number;
+  course_id: number;
+  lecture_date: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  created_at?: string;
+};
+
+type AttendanceEnrollment = {
+  enrollment_id: number;
+  student_id: number;
+  student_name: string;
+  department?: string | null;
+};
+
+type AttendanceStatus = "present" | "absent";
+
 const TeacherHome: React.FC = () => {
   const [profile, setProfile] = useState<TeacherProfile | null>(null);
   const [courses, setCourses] = useState<TeacherCoursesRes | null>(null);
@@ -65,6 +84,19 @@ const TeacherHome: React.FC = () => {
 
   // marks entry map: enrollment_id -> obtained_marks
   const [marks, setMarks] = useState<Record<number, string>>({});
+
+  // ✅ Attendance state
+  const [sessions, setSessions] = useState<AttendanceSession[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
+  const [attendanceEnrollments, setAttendanceEnrollments] = useState<AttendanceEnrollment[]>([]);
+  const [attendanceStatusMap, setAttendanceStatusMap] = useState<Record<number, AttendanceStatus>>({});
+  const [attendanceMsg, setAttendanceMsg] = useState<string | null>(null);
+
+  // ✅ (STEP A) Session create form fields
+  const todayISO = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const [lectureDate, setLectureDate] = useState<string>(todayISO);
+  const [startTime, setStartTime] = useState<string>("11:00:00");
+  const [endTime, setEndTime] = useState<string>("12:00:00");
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -121,6 +153,108 @@ const TeacherHome: React.FC = () => {
     }
   };
 
+  // ✅ Attendance: load sessions
+  const loadSessions = async (courseId: number) => {
+    try {
+      setAttendanceMsg(null);
+      const res = await api.get<AttendanceSession[]>(`/attendance/teacher/course/${courseId}/sessions`);
+      const arr = Array.isArray(res.data) ? res.data : [];
+      setSessions(arr);
+      const firstSessionId = arr?.[0]?.id ?? null;
+      setSelectedSessionId(firstSessionId);
+    } catch (err: any) {
+      console.error(err);
+      setAttendanceMsg("Failed to load attendance sessions.");
+      setSessions([]);
+      setSelectedSessionId(null);
+    }
+  };
+
+  // ✅ Attendance: load enrollments for course (attendance module)
+  const loadAttendanceEnrollments = async (courseId: number) => {
+    try {
+      setAttendanceMsg(null);
+      const res = await api.get<AttendanceEnrollment[]>(`/attendance/teacher/course/${courseId}/enrollments`);
+      const rows = Array.isArray(res.data) ? res.data : [];
+      setAttendanceEnrollments(rows);
+
+      // default everyone present
+      const initial: Record<number, AttendanceStatus> = {};
+      rows.forEach((r) => (initial[r.enrollment_id] = "present"));
+      setAttendanceStatusMap(initial);
+    } catch (err: any) {
+      console.error(err);
+      setAttendanceMsg("Failed to load course enrollments for attendance.");
+      setAttendanceEnrollments([]);
+      setAttendanceStatusMap({});
+    }
+  };
+
+  // ✅ (STEP B) Attendance: create session (send required payload + show real backend error)
+ const createSession = async () => {
+  if (!selectedCourseId) return;
+
+  try {
+    setLoading(true);
+    setAttendanceMsg(null);
+
+    const payload = {
+      course_id: selectedCourseId,  // ✅ REQUIRED by backend
+      lecture_date: lectureDate,
+      start_time: startTime,
+      end_time: endTime,
+    };
+
+    await api.post(`/attendance/teacher/course/${selectedCourseId}/sessions`, payload);
+
+    await loadSessions(selectedCourseId);
+    setAttendanceMsg("✅ Session created");
+  } catch (err: any) {
+    console.error(err);
+    const detail = err?.response?.data?.detail || err?.response?.data || "Failed to create session.";
+    setAttendanceMsg(typeof detail === "string" ? detail : JSON.stringify(detail));
+  } finally {
+    setLoading(false);
+  }
+};
+
+
+  // ✅ Attendance: submit bulk marks
+  const submitAttendance = async () => {
+    if (!selectedCourseId) {
+      setAttendanceMsg("Select a course first.");
+      return;
+    }
+    if (!selectedSessionId) {
+      setAttendanceMsg("Create/select a session first.");
+      return;
+    }
+    if (attendanceEnrollments.length === 0) {
+      setAttendanceMsg("No enrollments found for this course.");
+      return;
+    }
+
+    const records = attendanceEnrollments.map((en) => ({
+      enrollment_id: en.enrollment_id,
+      status: attendanceStatusMap[en.enrollment_id] ?? "present",
+    }));
+
+    try {
+      setLoading(true);
+      setAttendanceMsg(null);
+
+      await api.post(`/attendance/teacher/session/${selectedSessionId}/mark/bulk`, { records });
+
+      setAttendanceMsg("✅ Attendance saved");
+    } catch (err: any) {
+      console.error(err);
+      const detail = err?.response?.data?.detail || err?.response?.data || "Failed to save attendance";
+      setAttendanceMsg(typeof detail === "string" ? detail : JSON.stringify(detail));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadBase();
   }, []);
@@ -128,6 +262,13 @@ const TeacherHome: React.FC = () => {
   useEffect(() => {
     if (selectedCourseId) {
       loadItems(selectedCourseId, tab);
+      loadSessions(selectedCourseId);
+      loadAttendanceEnrollments(selectedCourseId);
+    } else {
+      setSessions([]);
+      setSelectedSessionId(null);
+      setAttendanceEnrollments([]);
+      setAttendanceStatusMap({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCourseId, tab]);
@@ -204,8 +345,6 @@ const TeacherHome: React.FC = () => {
         invalid.push(enr.enrollment_id);
         continue;
       }
-
-      // ✅ optional: prevent negative or above max
       if (n < 0) {
         invalid.push(enr.enrollment_id);
         continue;
@@ -224,9 +363,9 @@ const TeacherHome: React.FC = () => {
 
     if (invalid.length > 0) {
       setMsg(
-        `Some marks are invalid (enrollment_id: ${invalid.join(
-          ", "
-        )}). Make sure marks are numbers and within 0..${max ?? "MAX"}.`
+        `Some marks are invalid (enrollment_id: ${invalid.join(", ")}). Make sure marks are numbers and within 0..${
+          max ?? "MAX"
+        }.`
       );
       return;
     }
@@ -263,9 +402,7 @@ const TeacherHome: React.FC = () => {
   return (
     <div style={{ padding: 20, maxWidth: 1100, margin: "0 auto" }}>
       <h1 style={{ marginBottom: 6 }}>Teacher Dashboard</h1>
-      <p style={{ marginTop: 0, color: "#666" }}>
-        Courses → Students → Marks (Quiz / Assignment / Mid / Final)
-      </p>
+      <p style={{ marginTop: 0, color: "#666" }}>Courses → Attendance → Marks (Quiz / Assignment / Mid / Final)</p>
 
       {loading && <p>Loading...</p>}
       {msg && (
@@ -298,10 +435,7 @@ const TeacherHome: React.FC = () => {
         <div className="card-header">
           <h2 className="card-title">Course</h2>
         </div>
-        <div
-          className="card-body"
-          style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}
-        >
+        <div className="card-body" style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <label>
             <b>Select Course:</b>
           </label>
@@ -324,21 +458,137 @@ const TeacherHome: React.FC = () => {
           )}
 
           {!courses || courses.courses.length === 0 ? (
-            <span style={{ color: "#b00" }}>
-              No courses assigned. (Admin must assign teacher_id on courses)
-            </span>
+            <span style={{ color: "#b00" }}>No courses assigned. (Admin must assign teacher_id on courses)</span>
           ) : null}
+        </div>
+      </div>
+
+      {/* ✅ Attendance */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <div className="card-header" style={{ display: "flex", justifyContent: "space-between" }}>
+          <h2 className="card-title">Attendance</h2>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => selectedCourseId && loadSessions(selectedCourseId)}
+              disabled={!selectedCourseId}
+            >
+              Refresh Sessions
+            </button>
+            <button className="btn btn-primary" onClick={createSession} disabled={!selectedCourseId}>
+              Create Session
+            </button>
+          </div>
+        </div>
+
+        <div className="card-body">
+          {attendanceMsg && (
+            <div className={attendanceMsg.startsWith("✅") ? "alert" : "alert alert-error"} style={{ marginBottom: 12 }}>
+              {attendanceMsg}
+            </div>
+          )}
+
+          {!selectedCourseId ? (
+            <p>Select a course first.</p>
+          ) : (
+            <>
+              {/* ✅ (STEP C) Inputs for session create */}
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+                <label><b>Date:</b></label>
+                <input
+                  value={lectureDate}
+                  onChange={(e) => setLectureDate(e.target.value)}
+                  placeholder="YYYY-MM-DD"
+                  style={{ width: 140 }}
+                />
+
+                <label><b>Start:</b></label>
+                <input
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                  placeholder="HH:MM:SS"
+                  style={{ width: 110 }}
+                />
+
+                <label><b>End:</b></label>
+                <input
+                  value={endTime}
+                  onChange={(e) => setEndTime(e.target.value)}
+                  placeholder="HH:MM:SS"
+                  style={{ width: 110 }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <label>
+                  <b>Session:</b>
+                </label>
+                <select
+                  value={selectedSessionId ?? ""}
+                  onChange={(e) => setSelectedSessionId(e.target.value ? Number(e.target.value) : null)}
+                >
+                  <option value="">-- choose --</option>
+                  {sessions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      #{s.id} — {s.lecture_date}
+                    </option>
+                  ))}
+                </select>
+
+                <button className="btn btn-primary" onClick={submitAttendance} disabled={!selectedSessionId}>
+                  Save Attendance
+                </button>
+              </div>
+
+              {sessions.length === 0 && <p style={{ marginTop: 10 }}>No sessions yet. Click “Create Session”.</p>}
+
+              {attendanceEnrollments.length === 0 ? (
+                <p style={{ marginTop: 10 }}>No students/enrollments found for this course.</p>
+              ) : (
+                <table className="table" style={{ marginTop: 12 }}>
+                  <thead>
+                    <tr>
+                      <th>Enrollment ID</th>
+                      <th>Student</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attendanceEnrollments.map((en) => (
+                      <tr key={en.enrollment_id}>
+                        <td>{en.enrollment_id}</td>
+                        <td>
+                          <b>{en.student_name}</b>
+                          <div style={{ color: "#666" }}>Student #{en.student_id}</div>
+                        </td>
+                        <td>
+                          <select
+                            value={attendanceStatusMap[en.enrollment_id] ?? "present"}
+                            onChange={(e) =>
+                              setAttendanceStatusMap((prev) => ({
+                                ...prev,
+                                [en.enrollment_id]: e.target.value as AttendanceStatus,
+                              }))
+                            }
+                          >
+                            <option value="present">present</option>
+                            <option value="absent">absent</option>
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
         </div>
       </div>
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
         {(["quiz", "assignment", "mid", "final"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            className={"nav-button" + (tab === t ? " active" : "")}
-            onClick={() => setTab(t)}
-          >
+          <button key={t} className={"nav-button" + (tab === t ? " active" : "")} onClick={() => setTab(t)}>
             {t.toUpperCase()}
           </button>
         ))}
@@ -348,10 +598,7 @@ const TeacherHome: React.FC = () => {
       <div className="card" style={{ marginTop: 14 }}>
         <div className="card-header" style={{ display: "flex", justifyContent: "space-between" }}>
           <h2 className="card-title">{tab.toUpperCase()} Items</h2>
-          <button
-            className="btn btn-secondary"
-            onClick={() => selectedCourseId && loadItems(selectedCourseId, tab)}
-          >
+          <button className="btn btn-secondary" onClick={() => selectedCourseId && loadItems(selectedCourseId, tab)}>
             Refresh Items
           </button>
         </div>
@@ -397,7 +644,7 @@ const TeacherHome: React.FC = () => {
                 onChange={(e) => {
                   const id = e.target.value ? Number(e.target.value) : null;
                   setSelectedItemId(id);
-                  setMarks({}); // reset marks when item changes
+                  setMarks({});
                 }}
               >
                 <option value="">-- choose --</option>
@@ -418,8 +665,8 @@ const TeacherHome: React.FC = () => {
 
           {selectedItem && (
             <div style={{ marginTop: 10, color: "#666" }}>
-              You are entering <b>{tab.toUpperCase()}</b> marks for:{" "}
-              <b>{selectedItem.title}</b> (Max <b>{selectedItem.max_marks}</b>)
+              You are entering <b>{tab.toUpperCase()}</b> marks for: <b>{selectedItem.title}</b> (Max{" "}
+              <b>{selectedItem.max_marks}</b>)
             </div>
           )}
         </div>
@@ -453,11 +700,7 @@ const TeacherHome: React.FC = () => {
                   <th>Status</th>
                   <th>
                     Obtained Marks{" "}
-                    {selectedItem ? (
-                      <span style={{ color: "#666" }}>
-                        (out of {selectedItem.max_marks})
-                      </span>
-                    ) : null}
+                    {selectedItem ? <span style={{ color: "#666" }}>(out of {selectedItem.max_marks})</span> : null}
                   </th>
                 </tr>
               </thead>
@@ -484,9 +727,7 @@ const TeacherHome: React.FC = () => {
                         placeholder={selectedItem ? "e.g. 7" : "Select item first"}
                         style={{ width: 120 }}
                       />
-                      {selectedItem && (
-                        <span style={{ color: "#666" }}>/ {selectedItem.max_marks}</span>
-                      )}
+                      {selectedItem && <span style={{ color: "#666" }}>/ {selectedItem.max_marks}</span>}
                     </td>
                   </tr>
                 ))}
@@ -495,8 +736,7 @@ const TeacherHome: React.FC = () => {
           )}
 
           <p style={{ color: "#666", marginTop: 10 }}>
-            Note: Marks upload uses <b>enrollment_id</b> (backend requirement). Student portal will show marks via{" "}
-            <code>/assessments/my</code>.
+            Note: Marks upload uses <b>enrollment_id</b>. Student portal shows marks via <code>/assessments/my</code>.
           </p>
         </div>
       </div>

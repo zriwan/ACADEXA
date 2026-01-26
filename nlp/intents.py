@@ -201,6 +201,235 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
         ),
         "post": lambda m: {},
     },
+
+    # ---------- CREATE Operations ----------
+    
+    # create_student (enhanced)
+    {
+        "name": "create_student",
+        "regex": re.compile(
+            r"^(?:add|create|register)\s+student\s+"
+            r"(?P<name>[a-z][a-z\s]+?)"
+            r"(?:\s+in\s+department\s+(?P<department>[a-z0-9\s]+))?"
+            r"(?:\s+with\s+gpa\s+(?P<gpa>\d+\.?\d*))?"
+            r"(?:\s+email\s+(?P<email>[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}))?"
+            r"(?:\s+password\s+(?P<password>[a-z0-9]+))?$"
+        ),
+        "post": lambda m: {
+            "name": m.group("name").strip(),
+            "department": m.group("department").strip() if m.group("department") else None,
+            "gpa": float(m.group("gpa")) if m.group("gpa") else None,
+            "email": m.group("email") if m.group("email") else None,
+            "password": m.group("password") if m.group("password") else None,
+        },
+    },
+
+    # create_teacher
+    {
+        "name": "create_teacher",
+        "regex": re.compile(
+            r"^(?:add|create|register)\s+teacher\s+"
+            r"(?P<name>[a-z][a-z\s]+?)"
+            r"(?:\s+in\s+department\s+(?P<department>[a-z0-9\s]+))?"
+            r"(?:\s+email\s+(?P<email>[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}))?"
+            r"(?:\s+expertise\s+(?P<expertise>[a-z0-9\s]+))?"
+            r"(?:\s+password\s+(?P<password>[a-z0-9]+))?$"
+        ),
+        "post": lambda m: {
+            "name": m.group("name").strip(),
+            "department": m.group("department").strip() if m.group("department") else None,
+            "email": m.group("email") if m.group("email") else None,
+            "expertise": m.group("expertise").strip() if m.group("expertise") else None,
+            "password": m.group("password") if m.group("password") else None,
+        },
+    },
+
+    # create_course (enhanced)
+    {
+        "name": "create_course",
+        "regex": re.compile(
+            r"^(?:add|create)\s+course\s+"
+            r"(?P<title>[a-z][a-z0-9\s\-]+?)"
+            r"(?:\s+code\s+(?P<code>[a-z0-9\-]+))?"
+            r"(?:\s+credit\s+hours?\s+(?P<credit_hours>\d+))?"
+            r"(?:\s+teacher\s+(?P<teacher_id>\d+))?$"
+        ),
+        "post": lambda m: {
+            "title": m.group("title").strip(),
+            "code": m.group("code") if m.group("code") else None,
+            "credit_hours": int(m.group("credit_hours")) if m.group("credit_hours") else None,
+            "teacher_id": int(m.group("teacher_id")) if m.group("teacher_id") else None,
+        },
+    },
+
+    # create_enrollment
+    {
+        "name": "create_enrollment",
+        "regex": re.compile(
+            r"^(?:enroll|add|register)\s+student\s+(?P<student_id>\d+)"
+            r"\s+in\s+course\s+(?P<course_id>\d+)"
+            r"(?:\s+semester\s+(?P<semester>[a-z0-9\s]+))?"
+            r"(?:\s+status\s+(?P<status>[a-z]+))?$"
+        ),
+        "post": lambda m: {
+            "student_id": int(m.group("student_id")),
+            "course_id": int(m.group("course_id")),
+            "semester": m.group("semester").strip() if m.group("semester") else None,
+            "status": m.group("status") if m.group("status") else None,
+        },
+    },
+
+    # ---------- UPDATE Operations ----------
+    
+    # update_student
+    {
+        "name": "update_student",
+        "regex": re.compile(
+            r"^update\s+student\s+(?P<student_id>\d+)"
+            r"(?:\s+name\s+to\s+(?P<name>[a-z][a-z\s]+))?"
+            r"(?:\s+department\s+to\s+(?P<department>[a-z0-9\s]+))?"
+            r"(?:\s+gpa\s+to\s+(?P<gpa>\d+\.?\d*))?$"
+        ),
+        "post": lambda m: {
+            "student_id": int(m.group("student_id")),
+            "name": m.group("name").strip() if m.group("name") else None,
+            "department": m.group("department").strip() if m.group("department") else None,
+            "gpa": float(m.group("gpa")) if m.group("gpa") else None,
+        },
+    },
+
+    # update_teacher
+    {
+        "name": "update_teacher",
+        "regex": re.compile(
+            r"^update\s+teacher\s+(?P<teacher_id>\d+)"
+            r"(?:\s+name\s+to\s+(?P<name>[a-z][a-z\s]+))?"
+            r"(?:\s+department\s+to\s+(?P<department>[a-z0-9\s]+))?"
+            r"(?:\s+expertise\s+to\s+(?P<expertise>[a-z0-9\s]+))?$"
+        ),
+        "post": lambda m: {
+            "teacher_id": int(m.group("teacher_id")),
+            "name": m.group("name").strip() if m.group("name") else None,
+            "department": m.group("department").strip() if m.group("department") else None,
+            "expertise": m.group("expertise").strip() if m.group("expertise") else None,
+        },
+    },
+
+    # update_course
+    {
+        "name": "update_course",
+        "regex": re.compile(
+            r"^update\s+course\s+(?P<course_id>\d+)"
+            r"(?:\s+title\s+to\s+(?P<title>[a-z][a-z0-9\s\-]+))?"
+            r"(?:\s+code\s+to\s+(?P<code>[a-z0-9\-]+))?"
+            r"(?:\s+credit\s+hours?\s+to\s+(?P<credit_hours>\d+))?"
+            r"(?:\s+teacher\s+to\s+(?P<teacher_id>\d+))?$"
+        ),
+        "post": lambda m: {
+            "course_id": int(m.group("course_id")),
+            "title": m.group("title").strip() if m.group("title") else None,
+            "code": m.group("code") if m.group("code") else None,
+            "credit_hours": int(m.group("credit_hours")) if m.group("credit_hours") else None,
+            "teacher_id": int(m.group("teacher_id")) if m.group("teacher_id") else None,
+        },
+    },
+
+    # update_enrollment (grade/status)
+    {
+        "name": "update_enrollment",
+        "regex": re.compile(
+            r"^update\s+enrollment\s+(?P<enrollment_id>\d+)"
+            r"(?:\s+grade\s+to\s+(?P<grade>\d+\.?\d*))?"
+            r"(?:\s+status\s+to\s+(?P<status>[a-z]+))?"
+            r"(?:\s+semester\s+to\s+(?P<semester>[a-z0-9\s]+))?$"
+        ),
+        "post": lambda m: {
+            "enrollment_id": int(m.group("enrollment_id")),
+            "grade": float(m.group("grade")) if m.group("grade") else None,
+            "status": m.group("status") if m.group("status") else None,
+            "semester": m.group("semester").strip() if m.group("semester") else None,
+        },
+    },
+
+    # ---------- DELETE Operations ----------
+    
+    # delete_student (enhanced)
+    {
+        "name": "delete_student",
+        "regex": re.compile(
+            r"^(?:delete|remove)\s+student\s+(?P<student_id>\d+)$"
+        ),
+        "post": lambda m: {"student_id": int(m.group("student_id"))},
+    },
+
+    # delete_teacher
+    {
+        "name": "delete_teacher",
+        "regex": re.compile(
+            r"^(?:delete|remove)\s+teacher\s+(?P<teacher_id>\d+)$"
+        ),
+        "post": lambda m: {"teacher_id": int(m.group("teacher_id"))},
+    },
+
+    # delete_course (enhanced)
+    {
+        "name": "delete_course",
+        "regex": re.compile(
+            r"^(?:delete|remove)\s+course\s+(?P<course_id>\d+)$"
+            r"|^(?:delete|remove)\s+course\s+code\s+(?P<course_code>[a-z0-9\-]+)$"
+        ),
+        "post": lambda m: {
+            "course_id": int(m.group("course_id")) if m.group("course_id") else None,
+            "course_code": m.group("course_code") if m.group("course_code") else None,
+        },
+    },
+
+    # delete_enrollment
+    {
+        "name": "delete_enrollment",
+        "regex": re.compile(
+            r"^(?:delete|remove|drop)\s+enrollment\s+(?P<enrollment_id>\d+)$"
+            r"|^(?:drop|unenroll)\s+student\s+(?P<student_id>\d+)\s+from\s+course\s+(?P<course_id>\d+)$"
+        ),
+        "post": lambda m: {
+            "enrollment_id": int(m.group("enrollment_id")) if m.group("enrollment_id") else None,
+            "student_id": int(m.group("student_id")) if m.group("student_id") else None,
+            "course_id": int(m.group("course_id")) if m.group("course_id") else None,
+        },
+    },
+
+    # ---------- GET Operations (single item) ----------
+    
+    # get_student
+    {
+        "name": "get_student",
+        "regex": re.compile(
+            r"^(?:show|get|display)\s+student\s+(?P<student_id>\d+)$"
+        ),
+        "post": lambda m: {"student_id": int(m.group("student_id"))},
+    },
+
+    # get_teacher
+    {
+        "name": "get_teacher",
+        "regex": re.compile(
+            r"^(?:show|get|display)\s+teacher\s+(?P<teacher_id>\d+)$"
+        ),
+        "post": lambda m: {"teacher_id": int(m.group("teacher_id"))},
+    },
+
+    # get_course
+    {
+        "name": "get_course",
+        "regex": re.compile(
+            r"^(?:show|get|display)\s+course\s+(?P<course_id>\d+)$"
+            r"|^(?:show|get|display)\s+course\s+code\s+(?P<course_code>[a-z0-9\-]+)$"
+        ),
+        "post": lambda m: {
+            "course_id": int(m.group("course_id")) if m.group("course_id") else None,
+            "course_code": m.group("course_code") if m.group("course_code") else None,
+        },
+    },
 ]
 
 

@@ -3,10 +3,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 from typing import Literal, Optional
-
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from datetime import datetime, date
 
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # -------------------------
@@ -179,7 +178,6 @@ class TokenResponse(BaseModel):
     refresh_token: str | None = None
 
 
-# ✅ Day-2 Part-C: /auth/me response schema
 class MeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -187,11 +185,8 @@ class MeResponse(BaseModel):
     name: str
     email: EmailStr
     role: Literal["admin", "student", "teacher", "hod", "user"]
-
     student_id: int | None = None
     teacher_id: int | None = None
-
-
 
 
 # -------------------------
@@ -204,10 +199,12 @@ class AssessmentItemCreate(BaseModel):
     max_marks: float = Field(ge=0)
     due_date: datetime | None = None
 
+
 class AssessmentItemUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=120)
     max_marks: float | None = Field(default=None, ge=0)
     due_date: datetime | None = None
+
 
 class AssessmentItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -219,10 +216,12 @@ class AssessmentItemResponse(BaseModel):
     max_marks: float
     due_date: datetime | None = None
 
+
 class ScoreUpsert(BaseModel):
     assessment_item_id: int
     enrollment_id: int
     obtained_marks: float = Field(ge=0)
+
 
 class AssessmentScoreResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -273,11 +272,13 @@ class FeeAccountSet(BaseModel):
     student_id: int
     total_fee: float = Field(ge=0)
 
+
 class FeeTxnCreate(BaseModel):
     student_id: int
     txn_type: Literal["payment", "fine", "scholarship", "adjustment"]
-    amount: float  # payment/fine/scholarship usually positive, adjustment can +/- 
+    amount: float
     note: str | None = Field(default=None, max_length=255)
+
 
 class FeeTxnResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -289,6 +290,7 @@ class FeeTxnResponse(BaseModel):
     note: str | None = None
     created_at: datetime
 
+
 class FeeMyResponse(BaseModel):
     student_id: int
     total_fee: float
@@ -297,13 +299,12 @@ class FeeMyResponse(BaseModel):
     transactions: list[FeeTxnResponse]
 
 
-
 # -------------------------
 # ✅ Attendance
 # -------------------------
 class AttendanceSessionCreate(BaseModel):
     course_id: int
-    lecture_date: datetime.date
+    lecture_date: date  # ✅ FIXED
     start_time: str | None = Field(default=None, max_length=10)  # "09:00"
     end_time: str | None = Field(default=None, max_length=10)    # "10:30"
 
@@ -313,7 +314,7 @@ class AttendanceSessionResponse(BaseModel):
 
     id: int
     course_id: int
-    lecture_date: datetime.date
+    lecture_date: date  # ✅ FIXED
     start_time: str | None = None
     end_time: str | None = None
     created_at: datetime
@@ -351,7 +352,6 @@ class AttendanceCourseDetailRow(BaseModel):
     start_time: str | None = None
     end_time: str | None = None
     status: Literal["present", "absent", "late"]
-
 
 
 class AttendanceCourseDetailResponse(BaseModel):

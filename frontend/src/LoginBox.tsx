@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { api, setAuthToken } from "./api/client";
+import PasswordInput from "./PasswordInput";
 
 const TOKEN_KEY = "acadexa_token";
 
@@ -39,52 +40,55 @@ export default function LoginBox({ onLoggedIn }: { onLoggedIn: () => void }) {
     }
   }
 
-  function logout() {
-    localStorage.removeItem(TOKEN_KEY);
-    setAuthToken(null);
-
-    // ✅ notify app
-    onLoggedIn();
-    window.dispatchEvent(new Event("acadexa-auth-changed"));
-  }
-
   return (
-    <div
-      style={{
-        border: "1px solid #ddd",
-        padding: 12,
-        borderRadius: 8,
-        maxWidth: 420,
-      }}
-    >
-      <h3 style={{ marginTop: 0 }}>Login</h3>
+    <div className="login-card">
+      <div className="login-header">
+        <div className="login-logo">A</div>
+        <h1 className="login-title">Welcome to ACADEXA</h1>
+        <p className="login-subtitle">University Student & Teacher Portal</p>
+      </div>
 
       <form onSubmit={login}>
-        <div style={{ display: "grid", gap: 8 }}>
+        <div className="form-row">
+          <label htmlFor="email">Email Address</label>
           <input
-            placeholder="Email"
+            id="email"
+            type="email"
+            placeholder="Enter your email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            required
+            autoFocus
           />
+        </div>
 
-          <input
-            placeholder="Password"
-            type="password"
+        <div className="form-row">
+          <label htmlFor="password">Password</label>
+          <PasswordInput
+            id="password"
+            placeholder="Enter your password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            required
           />
-
-          <button type="submit" disabled={loading}>
-            {loading ? "Logging in..." : "Login"}
-          </button>
-
-          <button type="button" onClick={logout}>
-            Logout
-          </button>
         </div>
+
+        {err && (
+          <div className="alert alert-error" style={{ marginBottom: "1rem" }}>
+            {err}
+          </div>
+        )}
+
+        <button type="submit" className="btn btn-primary" disabled={loading} style={{ width: "100%" }}>
+          {loading ? "Signing in..." : "Sign In"}
+        </button>
       </form>
 
-      {err && <p style={{ color: "crimson" }}>{err}</p>}
+      <div style={{ marginTop: "1.5rem", textAlign: "center" }}>
+        <p style={{ fontSize: "0.875rem", color: "var(--text-muted)", margin: 0 }}>
+          Secure access to your academic portal
+        </p>
+      </div>
     </div>
   );
 }

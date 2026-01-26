@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api/client";
 import { Teacher } from "./types";
+import PasswordInput from "./PasswordInput";
 
 type TeacherForm = {
   name: string;
@@ -34,6 +35,32 @@ const TeachersPage: React.FC = () => {
   });
 
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [passwordCopied, setPasswordCopied] = useState(false);
+
+  const copyPasswordToClipboard = async () => {
+    if (createdInfo?.temp_password) {
+      try {
+        await navigator.clipboard.writeText(createdInfo.temp_password);
+        setPasswordCopied(true);
+        setTimeout(() => setPasswordCopied(false), 2000);
+      } catch (err) {
+        console.error("Failed to copy password:", err);
+        // Fallback for older browsers
+        const textArea = document.createElement("textarea");
+        textArea.value = createdInfo.temp_password;
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand("copy");
+          setPasswordCopied(true);
+          setTimeout(() => setPasswordCopied(false), 2000);
+        } catch (fallbackErr) {
+          console.error("Fallback copy failed:", fallbackErr);
+        }
+        document.body.removeChild(textArea);
+      }
+    }
+  };
 
   const fetchTeachers = async () => {
     try {
@@ -71,6 +98,7 @@ const TeachersPage: React.FC = () => {
     });
     setEditingId(null);
     setCreatedInfo(null);
+    setPasswordCopied(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -91,6 +119,7 @@ const TeachersPage: React.FC = () => {
 
         const res = await api.post<CreateAccountRes>("/teachers/create-account", payload);
         setCreatedInfo(res.data);
+        setPasswordCopied(false);
       } else {
         // ✅ EDIT TEACHER PROFILE ONLY
         const payload = {
@@ -183,8 +212,7 @@ const TeachersPage: React.FC = () => {
             {editingId === null && (
               <div className="form-row">
                 <label>Teacher Password</label>
-                <input
-                  type="text"
+                <PasswordInput
                   name="password"
                   value={form.password ?? ""}
                   onChange={handleChange}
@@ -211,9 +239,60 @@ const TeachersPage: React.FC = () => {
             <div className="alert" style={{ marginTop: 12 }}>
               ✅ Teacher created: <b>{createdInfo.email}</b> <br />
               Teacher ID: <b>{createdInfo.teacher_id}</b>, User ID: <b>{createdInfo.user_id}</b> <br />
-              Password: <b>{createdInfo.temp_password}</b> <br />
-              <span style={{ color: "#666" }}>
-                (Copy this password and share with teacher for login)
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.5rem" }}>
+                <span>Password: </span>
+                <div className="password-copy-wrapper">
+                  <input
+                    type="password"
+                    value={createdInfo.temp_password}
+                    readOnly
+                    className="password-display-input"
+                  />
+                  <button
+                    type="button"
+                    className="btn-copy-password"
+                    onClick={copyPasswordToClipboard}
+                    title="Copy password to clipboard"
+                  >
+                    {passwordCopied ? (
+                      <>
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        Copy
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <span style={{ color: "#666", fontSize: "0.85rem", marginTop: "0.5rem", display: "block" }}>
+                (Copy the password and share with teacher for login)
               </span>
             </div>
           )}

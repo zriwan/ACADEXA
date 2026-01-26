@@ -1,4 +1,4 @@
-// src/StudentHome.tsx
+// frontend/src/StudentHome.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api/client";
 
@@ -6,7 +6,7 @@ type Profile = {
   id: number;
   name: string;
   department: string;
-  gpa: string; // backend returns string
+  gpa: string;
 };
 
 type GPARes = {
@@ -35,7 +35,6 @@ type EnrollmentItem = {
   grade: string | null;
 };
 
-/** Grades summary (from backend /assessments/my) */
 type GradeSummary = {
   course_id: number;
   course_code: string | null;
@@ -46,7 +45,6 @@ type GradeSummary = {
   total_out_of_100: number;
 };
 
-/** Grades detail (from backend /assessments/my/course/:id) */
 type GradeDetailItem = {
   item_id: number;
   title: string;
@@ -69,7 +67,6 @@ type GradeDetail = {
   total_out_of_100: number;
 };
 
-/** Fees */
 type FeeTxn = {
   id: number;
   student_id: number;
@@ -87,7 +84,25 @@ type FeeMy = {
   transactions: FeeTxn[];
 };
 
-type OpenTab = "profile" | "gpa" | "courses" | "enrollments" | "grades" | "fees";
+type AttendanceRecord = {
+  session_id: number;
+  lecture_date: string;
+  start_time?: string | null;
+  end_time?: string | null;
+  status: string;
+};
+
+type AttendanceMyCourseRes = {
+  student_id: number;
+  course_id: number;
+  course_title: string | null;
+  course_code?: string | null;
+  rows?: AttendanceRecord[];      // ✅ backend sends rows
+  records?: AttendanceRecord[];   // ✅ keep optional for safety
+};
+
+
+type OpenTab = "profile" | "gpa" | "courses" | "enrollments" | "attendance" | "grades" | "fees";
 
 function toNumberSafe(v: unknown): number {
   if (v === null || v === undefined) return 0;
@@ -101,8 +116,12 @@ const StudentHome: React.FC = () => {
   const [courses, setCourses] = useState<CoursesRes | null>(null);
   const [enrollments, setEnrollments] = useState<EnrollmentItem[] | null>(null);
 
+  const [attendanceCourseId, setAttendanceCourseId] = useState<number | null>(null);
+  const [attendance, setAttendance] = useState<AttendanceMyCourseRes | null>(null);
+
   const [gradeSummary, setGradeSummary] = useState<GradeSummary[] | null>(null);
   const [gradeDetail, setGradeDetail] = useState<GradeDetail | null>(null);
+
   const [fee, setFee] = useState<FeeMy | null>(null);
 
   const [open, setOpen] = useState<OpenTab>("profile");
@@ -118,9 +137,6 @@ const StudentHome: React.FC = () => {
     return m;
   }, [courses]);
 
-  // -------------------------
-  // Load Basics
-  // -------------------------
   const loadAll = async () => {
     try {
       setLoading(true);
@@ -138,7 +154,9 @@ const StudentHome: React.FC = () => {
       setCourses(c.data);
       setEnrollments(e.data);
 
-      // Reset derived tabs so they refresh from latest data
+      setAttendance(null);
+      setAttendanceCourseId(null);
+
       setGradeSummary(null);
       setGradeDetail(null);
       setFee(null);
@@ -150,29 +168,48 @@ const StudentHome: React.FC = () => {
     }
   };
 
-  // -------------------------
-  // ✅ Grades Summary (FIX)
-  // Uses /assessments/my if available.
-  // If your backend summary is still buggy, it falls back to building from /assessments/my/course/:id per course.
-  // -------------------------
+  // ✅ Attendance (SAFE)
+  const loadAttendance = async (courseId: number) => {
+  try {
+    setLoading(true);
+    setError(null);
+
+    const res = await api.get<AttendanceMyCourseRes>(`/attendance/my/course/${courseId}`);
+
+    const data = res.data as AttendanceMyCourseRes;
+
+    // ✅ backend uses rows, frontend expects records
+    const normalized: AttendanceMyCourseRes = {
+      ...data,
+      records: (data.records ?? data.rows ?? []) as AttendanceRecord[],
+    };
+
+    setAttendance(normalized);
+  } catch (err: any) {
+    console.error(err);
+    setError("Failed to load attendance.");
+  } finally {
+    setLoading(false);
+  }
+};
+
+
   const loadGrades = async () => {
     try {
       setLoading(true);
       setError(null);
       setGradeDetail(null);
 
-      // 1) try summary endpoint
       try {
         const res = await api.get<GradeSummary[]>("/assessments/my");
         if (Array.isArray(res.data)) {
           setGradeSummary(res.data);
           return;
         }
-      } catch (e) {
-        // ignore, fallback below
+      } catch {
+        // fallback below
       }
 
-      // 2) fallback: compute from detail endpoint per course (MOST RELIABLE)
       let courseIds: number[] = [];
       if (courses?.courses?.length) {
         courseIds = courses.courses.map((c) => c.course_id);
@@ -191,12 +228,11 @@ const StudentHome: React.FC = () => {
 
       const sumCat = (items: GradeDetailItem[], cat: GradeDetailItem["category"]) => {
         const filtered = items.filter((i) => i.category === cat);
-        const max = filtered.reduce((a, i) => a + (toNumberSafe(i.max_marks) || 0), 0);
-        const obt = filtered.reduce((a, i) => a + (toNumberSafe(i.obtained_marks) || 0), 0);
+        const max = filtered.reduce((a, i) => a + toNumberSafe(i.max_marks), 0);
+        const obt = filtered.reduce((a, i) => a + toNumberSafe(i.obtained_marks), 0);
         return { obt, max };
       };
 
-      // weights: internal(quiz+assignment) 30%, mid 30%, final 40%
       const W_INTERNAL = 0.3;
       const W_MID = 0.3;
       const W_FINAL = 0.4;
@@ -237,9 +273,6 @@ const StudentHome: React.FC = () => {
     }
   };
 
-  // -------------------------
-  // ✅ Grade Detail
-  // -------------------------
   const openCourseDetail = async (course_id: number) => {
     try {
       setLoading(true);
@@ -255,9 +288,6 @@ const StudentHome: React.FC = () => {
     }
   };
 
-  // -------------------------
-  // ✅ Fees (Swagger: /fees/me)
-  // -------------------------
   const loadFees = async () => {
     try {
       setLoading(true);
@@ -280,15 +310,29 @@ const StudentHome: React.FC = () => {
 
   const toggle = (key: OpenTab) => {
     setOpen(key);
+
     if (key === "grades" && gradeSummary === null) loadGrades();
     if (key === "fees" && fee === null) loadFees();
+
+    if (key === "attendance") {
+      const firstCourse = courses?.courses?.[0]?.course_id ?? null;
+      const cid = attendanceCourseId ?? firstCourse;
+      if (cid) {
+        setAttendanceCourseId(cid);
+        loadAttendance(cid);
+      } else {
+        setAttendance(null);
+      }
+    }
   };
+
+  const attendanceRecords = attendance?.records ?? [];
 
   return (
     <div style={{ padding: 20, maxWidth: 980, margin: "0 auto" }}>
       <h1 style={{ fontSize: 28, marginBottom: 6 }}>Student Dashboard</h1>
       <p style={{ color: "#666", marginTop: 0 }}>
-        View your profile, GPA, courses, enrollments, grades and fee status.
+        View your profile, GPA, courses, enrollments, attendance, grades and fee status.
       </p>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
@@ -306,6 +350,12 @@ const StudentHome: React.FC = () => {
           onClick={() => toggle("enrollments")}
         >
           Enrollments
+        </button>
+        <button
+          className={"nav-button" + (open === "attendance" ? " active" : "")}
+          onClick={() => toggle("attendance")}
+        >
+          Attendance
         </button>
         <button className={"nav-button" + (open === "grades" ? " active" : "")} onClick={() => toggle("grades")}>
           Grades
@@ -443,6 +493,81 @@ const StudentHome: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+            )}
+          </div>
+        </section>
+      )}
+
+      {/* ✅ ATTENDANCE */}
+      {open === "attendance" && (
+        <section className="card" style={{ marginTop: 18 }}>
+          <div className="card-header" style={{ display: "flex", justifyContent: "space-between" }}>
+            <h2 className="card-title">My Attendance</h2>
+            <button
+              className="btn btn-secondary"
+              onClick={() => attendanceCourseId && loadAttendance(attendanceCourseId)}
+              disabled={!attendanceCourseId}
+            >
+              Refresh Attendance
+            </button>
+          </div>
+
+          <div className="card-body">
+            {!courses?.courses?.length ? (
+              <p>No courses found.</p>
+            ) : (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <label>
+                  <b>Select Course:</b>
+                </label>
+                <select
+                  value={attendanceCourseId ?? ""}
+                  onChange={(e) => {
+                    const cid = e.target.value ? Number(e.target.value) : null;
+                    setAttendanceCourseId(cid);
+                    setAttendance(null);
+                    if (cid) loadAttendance(cid);
+                  }}
+                >
+                  <option value="">-- choose --</option>
+                  {courses.courses.map((c) => (
+                    <option key={c.course_id} value={c.course_id}>
+                      {c.code} — {c.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {!attendance ? (
+              <p style={{ marginTop: 12 }}>Select a course to view attendance.</p>
+            ) : attendanceRecords.length === 0 ? (
+              <p style={{ marginTop: 12 }}>No attendance records yet.</p>
+            ) : (
+              <table className="table" style={{ marginTop: 12 }}>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Session ID</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceRecords.map((r) => (
+                    <tr key={`${r.session_id}-${r.lecture_date}`}>
+                      <td>{r.lecture_date}</td>
+                      <td>{r.session_id}</td>
+                      <td style={{ fontWeight: 700 }}>{r.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            {attendanceCourseId && (
+              <div style={{ marginTop: 10, color: "#666" }}>
+                Course: <b>{courseMap.get(attendanceCourseId)?.code ?? `#${attendanceCourseId}`}</b>
+              </div>
             )}
           </div>
         </section>

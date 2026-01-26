@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api/client";
 import { Student, StudentCreatePayload } from "./types";
+import PasswordInput from "./PasswordInput";
 
 const StudentsPage: React.FC = () => {
   const [meEmail, setMeEmail] = useState<string | null>(null);
@@ -196,9 +197,8 @@ const StudentsPage: React.FC = () => {
 
                 <div className="form-row">
                   <label>Student Password</label>
-                  <input
+                  <PasswordInput
                     name="password"
-                    type="password"
                     value={form.password || ""}
                     onChange={handleChange}
                     placeholder="min 6 chars"
