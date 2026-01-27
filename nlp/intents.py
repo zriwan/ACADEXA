@@ -56,6 +56,19 @@ INTENT_PATTERNS: List[Dict[str, Any]] = [
         ),
     },
 
+    # list_students — by department
+    # examples:
+    #   "list students in cs"
+    #   "show students in department cs"
+    {
+        "name": "list_students",
+        "regex": re.compile(
+            r"^(?:list|show|get)\s+students\s+in\s+"
+            r"(?:department\s+)?(?P<department>[a-z0-9\-]+)$"
+        ),
+        "post": lambda m: {"department": m.group("department").upper()},
+    },
+
     # ---------- Student results ----------
 
     # show_student_result

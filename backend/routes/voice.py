@@ -308,6 +308,16 @@ def handle_command(
     intent = parsed.intent
     slots = parsed.slots or {}
 
+    # Global safety: Voice Console is read-only.
+    # Block any create/update/delete intents at the API level.
+    if intent.startswith("create_") or intent.startswith("update_") or intent.startswith("delete_"):
+        return {
+            **base,
+            "info": "Voice console is read-only; please use the web forms for any create, update, or delete operations.",
+            "results_type": None,
+            "results": [],
+        }
+
     if intent == "unknown":
         return {
             **base,
@@ -405,16 +415,27 @@ def handle_command(
         if role in (UserRole.admin, UserRole.hod):
             q = db.query(Student)
 
+            # Optional: filter by course code
             if course_code:
                 course = db.query(Course).filter(Course.code.ilike(course_code)).first()
                 if not course:
-                    return {**base, "info": f"No course found with code '{course_code}'.", "results_type": "students", "results": []}
+                    return {
+                        **base,
+                        "info": f"No course found with code '{course_code}'.",
+                        "results_type": "students",
+                        "results": [],
+                    }
 
                 q = (
                     db.query(Student)
                     .join(Enrollment, Enrollment.student_id == Student.id)
                     .filter(Enrollment.course_id == course.id)
                 )
+
+            # Optional: filter by department (from NLP slot)
+            dept = (slots.get("department") or "").strip()
+            if dept:
+                q = q.filter(Student.department.ilike(dept))
 
             students = q.order_by(Student.id).all()
             results = [
@@ -428,7 +449,7 @@ def handle_command(
             ]
             return {**base, "info": f"Found {len(results)} student(s).", "results_type": "students", "results": results}
 
-        # Teacher: only students in teacher courses (optional filter by course)
+        # Teacher: only students in teacher courses (optional filter by course/department)
         if role == UserRole.teacher:
             teacher_id = _require_teacher(current_user)
 
@@ -439,8 +460,14 @@ def handle_command(
                 .filter(Course.teacher_id == teacher_id)
             )
 
+            # Optional: filter by course code
             if course_code:
                 q = q.filter(Course.code.ilike(course_code))
+
+            # Optional: filter by department (from NLP slot)
+            dept = (slots.get("department") or "").strip()
+            if dept:
+                q = q.filter(Student.department.ilike(dept))
 
             rows = q.order_by(Student.id).all()
             results = []
