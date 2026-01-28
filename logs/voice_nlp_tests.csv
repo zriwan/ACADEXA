@@ -1,7 +1,0 @@
-timestamp,recognized_text,intent,slots,error
-2025-10-31T02:06:30,8 student Ali Raza roll number,unknown,{},
-2025-10-31T02:06:36,,unknown,{},timeout
-2025-10-31T02:06:42,,unknown,{},unrecognized
-2025-10-31T02:06:47,,unknown,{},unrecognized
-2025-10-31T02:06:50,,unknown,{},unrecognized
-2025-10-31T02:06:57,please,unknown,{},

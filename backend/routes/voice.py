@@ -4,11 +4,20 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from backend.database import get_db_connection
-from backend.security import get_current_user
-from backend.models import Student, Course, Enrollment, Teacher, User, UserRole
+from backend.security import get_current_user, hash_password
+from backend.models import (
+    Student,
+    Course,
+    Enrollment,
+    Teacher,
+    User,
+    UserRole,
+    AttendanceSession,
+    AttendanceRecord,
+)
 
 from nlp.nlp_processor import parse_command
-from nlp.intents import match_intent  # ✅ already added
+from nlp.intents import match_intent  # (not used directly, but ok to keep)
 
 router = APIRouter(prefix="/voice", tags=["Voice"])
 
@@ -64,12 +73,14 @@ def handle_command(
       - teacher self intents (my teaching courses, enrollments)
     Now added:
       - Admin/HOD + role-based list_* intents
+      - ✅ Attendance intents
     """
 
     raw_text = payload.text
-    text = _normalize(raw_text)
+    text = _normalize(raw_text)  # ✅ FIX: used by your keyword fallback section
 
-    matched = match_intent(text)
+    parsed = parse_command(raw_text)  # strong normalize inside
+    matched = {"intent": parsed.intent, "slots": parsed.slots} if parsed.intent != "unknown" else None
 
     # =====================================================
     # ✅ Day-3: show_my_cgpa (intent-based)
@@ -302,11 +313,19 @@ def handle_command(
     # -----------------------------
     # ✅ NLP flow (ADD REAL HANDLERS HERE)
     # -----------------------------
-    parsed = parse_command(raw_text)
-
     base = {"raw_text": raw_text, "parsed": parsed.model_dump()}
     intent = parsed.intent
     slots = parsed.slots or {}
+
+    # Global safety: Voice Console is read-only.
+    # Block any create/update/delete intents at the API level.
+    if intent.startswith("create_") or intent.startswith("update_") or intent.startswith("delete_"):
+        return {
+            **base,
+            "info": "Voice console is read-only; please use the web forms for any create, update, or delete operations.",
+            "results_type": None,
+            "results": [],
+        }
 
     if intent == "unknown":
         return {
@@ -317,6 +336,152 @@ def handle_command(
             ),
             "results_type": None,
             "results": [],
+        }
+
+    # -----------------------------
+    # ✅ Attendance (Student)
+    # -----------------------------
+    if intent == "show_my_attendance":
+        student_id = _require_student(current_user)
+
+        enrolls = (
+            db.query(Enrollment, Course)
+            .join(Course, Course.id == Enrollment.course_id)
+            .filter(Enrollment.student_id == student_id)
+            .order_by(Course.id)
+            .all()
+        )
+
+        results = []
+
+        def _sv(x):
+            return x.value if hasattr(x, "value") else str(x)
+
+        for en, co in enrolls:
+            total_sessions = (
+                db.query(AttendanceSession)
+                .filter(AttendanceSession.course_id == co.id)
+                .count()
+            )
+
+            recs = (
+                db.query(AttendanceRecord)
+                .join(AttendanceSession, AttendanceSession.id == AttendanceRecord.session_id)
+                .filter(
+                    AttendanceRecord.enrollment_id == en.id,
+                    AttendanceSession.course_id == co.id,
+                )
+                .all()
+            )
+
+            present = sum(1 for r in recs if _sv(r.status) == "present")
+            absent = sum(1 for r in recs if _sv(r.status) == "absent")
+            late = sum(1 for r in recs if _sv(r.status) == "late")
+
+            # If session exists but record missing => treat as absent
+            missing = max(total_sessions - len(recs), 0)
+            absent_total = absent + missing
+
+            percent = (present / total_sessions) * 100 if total_sessions > 0 else 0.0
+
+            results.append(
+                {
+                    "course_id": co.id,
+                    "course_code": co.code,
+                    "course_title": co.title,
+                    "total_sessions": total_sessions,
+                    "present": present,
+                    "absent": absent_total,
+                    "late": late,
+                    "percent_present": round(percent, 2),
+                }
+            )
+
+        if not results:
+            return {
+                **base,
+                "info": "No attendance data found yet.",
+                "results_type": "attendance_summary",
+                "results": [],
+            }
+
+        return {
+            **base,
+            "info": f"Attendance summary loaded for {len(results)} course(s).",
+            "results_type": "attendance_summary",
+            "results": results,
+        }
+
+    if intent == "show_my_attendance_course":
+        student_id = _require_student(current_user)
+        course_code = (slots.get("course_code") or slots.get("course") or "").strip()
+
+        if not course_code:
+            return {
+                **base,
+                "info": "Please specify course code, e.g. 'show my attendance for CS-101'.",
+                "results_type": "attendance_course_detail",
+                "results": [],
+            }
+
+        co = db.query(Course).filter(Course.code.ilike(course_code)).first()
+        if not co:
+            return {
+                **base,
+                "info": f"No course found with code '{course_code}'.",
+                "results_type": "attendance_course_detail",
+                "results": [],
+            }
+
+        en = (
+            db.query(Enrollment)
+            .filter(Enrollment.student_id == student_id, Enrollment.course_id == co.id)
+            .first()
+        )
+        if not en:
+            return {
+                **base,
+                "info": "You are not enrolled in this course.",
+                "results_type": "attendance_course_detail",
+                "results": [],
+            }
+
+        sessions = (
+            db.query(AttendanceSession)
+            .filter(AttendanceSession.course_id == co.id)
+            .order_by(AttendanceSession.lecture_date.desc(), AttendanceSession.id.desc())
+            .all()
+        )
+
+        recs = db.query(AttendanceRecord).filter(AttendanceRecord.enrollment_id == en.id).all()
+        status_map = {
+            r.session_id: (r.status.value if hasattr(r.status, "value") else str(r.status))
+            for r in recs
+        }
+
+        rows = []
+        for s in sessions:
+            rows.append(
+                {
+                    "session_id": s.id,
+                    "lecture_date": str(s.lecture_date),
+                    "start_time": getattr(s, "start_time", None),
+                    "end_time": getattr(s, "end_time", None),
+                    "status": status_map.get(s.id, "absent"),
+                }
+            )
+
+        return {
+            **base,
+            "info": f"Attendance detail loaded for {co.code}.",
+            "results_type": "attendance_course_detail",
+            "results": {
+                "student_id": student_id,
+                "course_id": co.id,
+                "course_code": co.code,
+                "course_title": co.title,
+                "rows": rows,
+            },
         }
 
     # -----------------------------
@@ -405,16 +570,27 @@ def handle_command(
         if role in (UserRole.admin, UserRole.hod):
             q = db.query(Student)
 
+            # Optional: filter by course code
             if course_code:
                 course = db.query(Course).filter(Course.code.ilike(course_code)).first()
                 if not course:
-                    return {**base, "info": f"No course found with code '{course_code}'.", "results_type": "students", "results": []}
+                    return {
+                        **base,
+                        "info": f"No course found with code '{course_code}'.",
+                        "results_type": "students",
+                        "results": [],
+                    }
 
                 q = (
                     db.query(Student)
                     .join(Enrollment, Enrollment.student_id == Student.id)
                     .filter(Enrollment.course_id == course.id)
                 )
+
+            # Optional: filter by department (from NLP slot)
+            dept = (slots.get("department") or "").strip()
+            if dept:
+                q = q.filter(Student.department.ilike(dept))
 
             students = q.order_by(Student.id).all()
             results = [
@@ -428,7 +604,7 @@ def handle_command(
             ]
             return {**base, "info": f"Found {len(results)} student(s).", "results_type": "students", "results": results}
 
-        # Teacher: only students in teacher courses (optional filter by course)
+        # Teacher: only students in teacher courses (optional filter by course/department)
         if role == UserRole.teacher:
             teacher_id = _require_teacher(current_user)
 
@@ -439,8 +615,14 @@ def handle_command(
                 .filter(Course.teacher_id == teacher_id)
             )
 
+            # Optional: filter by course code
             if course_code:
                 q = q.filter(Course.code.ilike(course_code))
+
+            # Optional: filter by department (from NLP slot)
+            dept = (slots.get("department") or "").strip()
+            if dept:
+                q = q.filter(Student.department.ilike(dept))
 
             rows = q.order_by(Student.id).all()
             results = []
