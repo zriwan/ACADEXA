@@ -5,10 +5,19 @@ from pydantic import BaseModel
 
 from backend.database import get_db_connection
 from backend.security import get_current_user, hash_password
-from backend.models import Student, Course, Enrollment, Teacher, User, UserRole
+from backend.models import (
+    Student,
+    Course,
+    Enrollment,
+    Teacher,
+    User,
+    UserRole,
+    AttendanceSession,
+    AttendanceRecord,
+)
 
 from nlp.nlp_processor import parse_command
-from nlp.intents import match_intent  # ✅ already added
+from nlp.intents import match_intent  # (not used directly, but ok to keep)
 
 router = APIRouter(prefix="/voice", tags=["Voice"])
 
@@ -64,12 +73,14 @@ def handle_command(
       - teacher self intents (my teaching courses, enrollments)
     Now added:
       - Admin/HOD + role-based list_* intents
+      - ✅ Attendance intents
     """
 
     raw_text = payload.text
-    text = _normalize(raw_text)
+    text = _normalize(raw_text)  # ✅ FIX: used by your keyword fallback section
 
-    matched = match_intent(text)
+    parsed = parse_command(raw_text)  # strong normalize inside
+    matched = {"intent": parsed.intent, "slots": parsed.slots} if parsed.intent != "unknown" else None
 
     # =====================================================
     # ✅ Day-3: show_my_cgpa (intent-based)
@@ -302,8 +313,6 @@ def handle_command(
     # -----------------------------
     # ✅ NLP flow (ADD REAL HANDLERS HERE)
     # -----------------------------
-    parsed = parse_command(raw_text)
-
     base = {"raw_text": raw_text, "parsed": parsed.model_dump()}
     intent = parsed.intent
     slots = parsed.slots or {}
@@ -327,6 +336,152 @@ def handle_command(
             ),
             "results_type": None,
             "results": [],
+        }
+
+    # -----------------------------
+    # ✅ Attendance (Student)
+    # -----------------------------
+    if intent == "show_my_attendance":
+        student_id = _require_student(current_user)
+
+        enrolls = (
+            db.query(Enrollment, Course)
+            .join(Course, Course.id == Enrollment.course_id)
+            .filter(Enrollment.student_id == student_id)
+            .order_by(Course.id)
+            .all()
+        )
+
+        results = []
+
+        def _sv(x):
+            return x.value if hasattr(x, "value") else str(x)
+
+        for en, co in enrolls:
+            total_sessions = (
+                db.query(AttendanceSession)
+                .filter(AttendanceSession.course_id == co.id)
+                .count()
+            )
+
+            recs = (
+                db.query(AttendanceRecord)
+                .join(AttendanceSession, AttendanceSession.id == AttendanceRecord.session_id)
+                .filter(
+                    AttendanceRecord.enrollment_id == en.id,
+                    AttendanceSession.course_id == co.id,
+                )
+                .all()
+            )
+
+            present = sum(1 for r in recs if _sv(r.status) == "present")
+            absent = sum(1 for r in recs if _sv(r.status) == "absent")
+            late = sum(1 for r in recs if _sv(r.status) == "late")
+
+            # If session exists but record missing => treat as absent
+            missing = max(total_sessions - len(recs), 0)
+            absent_total = absent + missing
+
+            percent = (present / total_sessions) * 100 if total_sessions > 0 else 0.0
+
+            results.append(
+                {
+                    "course_id": co.id,
+                    "course_code": co.code,
+                    "course_title": co.title,
+                    "total_sessions": total_sessions,
+                    "present": present,
+                    "absent": absent_total,
+                    "late": late,
+                    "percent_present": round(percent, 2),
+                }
+            )
+
+        if not results:
+            return {
+                **base,
+                "info": "No attendance data found yet.",
+                "results_type": "attendance_summary",
+                "results": [],
+            }
+
+        return {
+            **base,
+            "info": f"Attendance summary loaded for {len(results)} course(s).",
+            "results_type": "attendance_summary",
+            "results": results,
+        }
+
+    if intent == "show_my_attendance_course":
+        student_id = _require_student(current_user)
+        course_code = (slots.get("course_code") or slots.get("course") or "").strip()
+
+        if not course_code:
+            return {
+                **base,
+                "info": "Please specify course code, e.g. 'show my attendance for CS-101'.",
+                "results_type": "attendance_course_detail",
+                "results": [],
+            }
+
+        co = db.query(Course).filter(Course.code.ilike(course_code)).first()
+        if not co:
+            return {
+                **base,
+                "info": f"No course found with code '{course_code}'.",
+                "results_type": "attendance_course_detail",
+                "results": [],
+            }
+
+        en = (
+            db.query(Enrollment)
+            .filter(Enrollment.student_id == student_id, Enrollment.course_id == co.id)
+            .first()
+        )
+        if not en:
+            return {
+                **base,
+                "info": "You are not enrolled in this course.",
+                "results_type": "attendance_course_detail",
+                "results": [],
+            }
+
+        sessions = (
+            db.query(AttendanceSession)
+            .filter(AttendanceSession.course_id == co.id)
+            .order_by(AttendanceSession.lecture_date.desc(), AttendanceSession.id.desc())
+            .all()
+        )
+
+        recs = db.query(AttendanceRecord).filter(AttendanceRecord.enrollment_id == en.id).all()
+        status_map = {
+            r.session_id: (r.status.value if hasattr(r.status, "value") else str(r.status))
+            for r in recs
+        }
+
+        rows = []
+        for s in sessions:
+            rows.append(
+                {
+                    "session_id": s.id,
+                    "lecture_date": str(s.lecture_date),
+                    "start_time": getattr(s, "start_time", None),
+                    "end_time": getattr(s, "end_time", None),
+                    "status": status_map.get(s.id, "absent"),
+                }
+            )
+
+        return {
+            **base,
+            "info": f"Attendance detail loaded for {co.code}.",
+            "results_type": "attendance_course_detail",
+            "results": {
+                "student_id": student_id,
+                "course_id": co.id,
+                "course_code": co.code,
+                "course_title": co.title,
+                "rows": rows,
+            },
         }
 
     # -----------------------------
@@ -590,556 +745,6 @@ def handle_command(
 
             return {**base, "info": f"Found {len(results)} enrollment(s) for student {student_id} in your courses.", "results_type": "enrollments", "results": results}
 
-    # -----------------------------
-    # ✅ CREATE Operations
-    # -----------------------------
-    
-    # create_student
-    if intent == "create_student":
-        _require_admin_or_hod(current_user)
-        
-        name = slots.get("name")
-        if not name:
-            return {**base, "info": "Please provide a student name.", "results_type": None, "results": []}
-        
-        student_data = {
-            "name": name,
-            "department": slots.get("department") or "CS",
-            "gpa": slots.get("gpa") or 0.0,
-        }
-        
-        email = slots.get("email")
-        password = slots.get("password")
-        
-        if email and password:
-            existing_user = db.query(User).filter(User.email == email).first()
-            if existing_user:
-                return {**base, "info": f"Email {email} already registered.", "results_type": None, "results": []}
-            
-            user = User(
-                name=name,
-                email=email,
-                hashed_password=hash_password(password),
-                role=UserRole.student,
-            )
-            db.add(user)
-            db.flush()
-            student_data["user_id"] = user.id
-        
-        student = Student(**student_data)
-        db.add(student)
-        db.commit()
-        db.refresh(student)
-        
-        return {
-            **base,
-            "info": f"Student '{name}' created successfully with ID {student.id}.",
-            "results_type": "student",
-            "results": [{"id": student.id, "name": student.name, "department": student.department, "gpa": float(student.gpa) if student.gpa else None}],
-        }
-    
-    # create_teacher
-    if intent == "create_teacher":
-        _require_admin_or_hod(current_user)
-        
-        name = slots.get("name")
-        if not name:
-            return {**base, "info": "Please provide a teacher name.", "results_type": None, "results": []}
-        
-        import secrets
-        
-        email = slots.get("email")
-        if not email:
-            return {**base, "info": "Please provide an email address.", "results_type": None, "results": []}
-        
-        existing_user = db.query(User).filter(User.email == email).first()
-        if existing_user:
-            return {**base, "info": f"Email {email} already registered.", "results_type": None, "results": []}
-        
-        password = slots.get("password")
-        temp_password = password or secrets.token_urlsafe(10)
-        
-        user = User(
-            name=name,
-            email=email,
-            hashed_password=hash_password(temp_password),
-            role=UserRole.teacher,
-        )
-        db.add(user)
-        db.flush()
-        
-        teacher = Teacher(
-            name=name,
-            department=slots.get("department") or "CS",
-            email=email,
-            expertise=slots.get("expertise"),
-            user_id=user.id,
-        )
-        db.add(teacher)
-        db.commit()
-        db.refresh(teacher)
-        
-        return {
-            **base,
-            "info": f"Teacher '{name}' created successfully. Teacher ID: {teacher.id}, Password: {temp_password}",
-            "results_type": "teacher",
-            "results": [{"id": teacher.id, "name": teacher.name, "department": teacher.department, "email": teacher.email}],
-        }
-    
-    # create_course
-    if intent == "create_course":
-        _require_admin_or_hod(current_user)
-        
-        title = slots.get("title")
-        if not title:
-            return {**base, "info": "Please provide a course title.", "results_type": None, "results": []}
-        
-        code = slots.get("code") or f"CS-{db.query(Course).count() + 1}"
-        credit_hours = slots.get("credit_hours") or 3
-        teacher_id = slots.get("teacher_id")
-        
-        existing = db.query(Course).filter(Course.code == code).first()
-        if existing:
-            return {**base, "info": f"Course code '{code}' already exists.", "results_type": None, "results": []}
-        
-        if teacher_id:
-            teacher = db.get(Teacher, teacher_id)
-            if not teacher:
-                return {**base, "info": f"Teacher with ID {teacher_id} not found.", "results_type": None, "results": []}
-        
-        course = Course(
-            title=title,
-            code=code,
-            credit_hours=credit_hours,
-            teacher_id=teacher_id,
-        )
-        db.add(course)
-        db.commit()
-        db.refresh(course)
-        
-        return {
-            **base,
-            "info": f"Course '{title}' ({code}) created successfully with ID {course.id}.",
-            "results_type": "course",
-            "results": [{"id": course.id, "title": course.title, "code": course.code, "credit_hours": course.credit_hours}],
-        }
-    
-    # create_enrollment
-    if intent == "create_enrollment":
-        role = _role_value(current_user.role)
-        if role not in (UserRole.admin, UserRole.hod, UserRole.teacher):
-            raise HTTPException(status_code=403, detail="Admin/HOD/Teacher access required")
-        
-        student_id = slots.get("student_id")
-        course_id = slots.get("course_id")
-        
-        if not student_id or not course_id:
-            return {**base, "info": "Please provide both student ID and course ID.", "results_type": None, "results": []}
-        
-        student = db.get(Student, student_id)
-        if not student:
-            return {**base, "info": f"Student with ID {student_id} not found.", "results_type": None, "results": []}
-        
-        course = db.get(Course, course_id)
-        if not course:
-            return {**base, "info": f"Course with ID {course_id} not found.", "results_type": None, "results": []}
-        
-        # Check if already enrolled
-        existing = db.query(Enrollment).filter(
-            Enrollment.student_id == student_id,
-            Enrollment.course_id == course_id,
-        ).first()
-        if existing:
-            return {**base, "info": f"Student {student_id} is already enrolled in course {course_id}.", "results_type": None, "results": []}
-        
-        enrollment = Enrollment(
-            student_id=student_id,
-            course_id=course_id,
-            semester=slots.get("semester"),
-            status=slots.get("status") or "enrolled",
-        )
-        db.add(enrollment)
-        db.commit()
-        db.refresh(enrollment)
-        
-        return {
-            **base,
-            "info": f"Student {student_id} enrolled in course {course_id} successfully.",
-            "results_type": "enrollment",
-            "results": [{"id": enrollment.id, "student_id": enrollment.student_id, "course_id": enrollment.course_id, "status": enrollment.status}],
-        }
-    
-    # -----------------------------
-    # ✅ UPDATE Operations
-    # -----------------------------
-    
-    # update_student
-    if intent == "update_student":
-        _require_admin_or_hod(current_user)
-        
-        student_id = slots.get("student_id")
-        if not student_id:
-            return {**base, "info": "Please provide a student ID.", "results_type": None, "results": []}
-        
-        student = db.get(Student, student_id)
-        if not student:
-            return {**base, "info": f"Student with ID {student_id} not found.", "results_type": None, "results": []}
-        
-        if slots.get("name"):
-            student.name = slots.get("name")
-        if slots.get("department"):
-            student.department = slots.get("department")
-        if slots.get("gpa") is not None:
-            student.gpa = slots.get("gpa")
-        
-        db.add(student)
-        db.commit()
-        db.refresh(student)
-        
-        return {
-            **base,
-            "info": f"Student {student_id} updated successfully.",
-            "results_type": "student",
-            "results": [{"id": student.id, "name": student.name, "department": student.department, "gpa": float(student.gpa) if student.gpa else None}],
-        }
-    
-    # update_teacher
-    if intent == "update_teacher":
-        _require_admin_or_hod(current_user)
-        
-        teacher_id = slots.get("teacher_id")
-        if not teacher_id:
-            return {**base, "info": "Please provide a teacher ID.", "results_type": None, "results": []}
-        
-        teacher = db.get(Teacher, teacher_id)
-        if not teacher:
-            return {**base, "info": f"Teacher with ID {teacher_id} not found.", "results_type": None, "results": []}
-        
-        if slots.get("name"):
-            teacher.name = slots.get("name")
-        if slots.get("department"):
-            teacher.department = slots.get("department")
-        if slots.get("expertise"):
-            teacher.expertise = slots.get("expertise")
-        
-        db.add(teacher)
-        db.commit()
-        db.refresh(teacher)
-        
-        return {
-            **base,
-            "info": f"Teacher {teacher_id} updated successfully.",
-            "results_type": "teacher",
-            "results": [{"id": teacher.id, "name": teacher.name, "department": teacher.department, "expertise": teacher.expertise}],
-        }
-    
-    # update_course
-    if intent == "update_course":
-        _require_admin_or_hod(current_user)
-        
-        course_id = slots.get("course_id")
-        course_code = slots.get("course_code")
-        
-        if not course_id and not course_code:
-            return {**base, "info": "Please provide a course ID or code.", "results_type": None, "results": []}
-        
-        if course_code and not course_id:
-            course = db.query(Course).filter(Course.code.ilike(course_code)).first()
-            if not course:
-                return {**base, "info": f"Course with code '{course_code}' not found.", "results_type": None, "results": []}
-        else:
-            course = db.get(Course, course_id)
-            if not course:
-                return {**base, "info": f"Course with ID {course_id} not found.", "results_type": None, "results": []}
-        
-        if slots.get("title"):
-            course.title = slots.get("title")
-        if slots.get("code"):
-            existing = db.query(Course).filter(Course.code == slots.get("code"), Course.id != course.id).first()
-            if existing:
-                return {**base, "info": f"Course code '{slots.get('code')}' already exists.", "results_type": None, "results": []}
-            course.code = slots.get("code")
-        if slots.get("credit_hours"):
-            course.credit_hours = slots.get("credit_hours")
-        if slots.get("teacher_id"):
-            teacher = db.get(Teacher, slots.get("teacher_id"))
-            if not teacher:
-                return {**base, "info": f"Teacher with ID {slots.get('teacher_id')} not found.", "results_type": None, "results": []}
-            course.teacher_id = slots.get("teacher_id")
-        
-        db.add(course)
-        db.commit()
-        db.refresh(course)
-        
-        return {
-            **base,
-            "info": f"Course {course.id} updated successfully.",
-            "results_type": "course",
-            "results": [{"id": course.id, "title": course.title, "code": course.code, "credit_hours": course.credit_hours}],
-        }
-    
-    # update_enrollment
-    if intent == "update_enrollment":
-        role = _role_value(current_user.role)
-        if role not in (UserRole.admin, UserRole.hod, UserRole.teacher):
-            raise HTTPException(status_code=403, detail="Admin/HOD/Teacher access required")
-        
-        enrollment_id = slots.get("enrollment_id")
-        if not enrollment_id:
-            return {**base, "info": "Please provide an enrollment ID.", "results_type": None, "results": []}
-        
-        enrollment = db.get(Enrollment, enrollment_id)
-        if not enrollment:
-            return {**base, "info": f"Enrollment with ID {enrollment_id} not found.", "results_type": None, "results": []}
-        
-        # Teacher can only update enrollments in their courses
-        if role == UserRole.teacher:
-            teacher_id = _require_teacher(current_user)
-            course = db.get(Course, enrollment.course_id)
-            if not course or course.teacher_id != teacher_id:
-                raise HTTPException(status_code=403, detail="You can only update enrollments of your own courses")
-        
-        if slots.get("grade") is not None:
-            enrollment.grade = slots.get("grade")
-        if slots.get("status"):
-            enrollment.status = slots.get("status")
-        if slots.get("semester"):
-            enrollment.semester = slots.get("semester")
-        
-        db.add(enrollment)
-        db.commit()
-        db.refresh(enrollment)
-        
-        # Recalculate GPA if grade was updated
-        if slots.get("grade") is not None:
-            enroll_rows = (
-                db.query(Enrollment, Course)
-                .join(Course, Course.id == Enrollment.course_id)
-                .filter(Enrollment.student_id == enrollment.student_id)
-                .all()
-            )
-            
-            total_points = 0.0
-            total_credits = 0.0
-            
-            for en, co in enroll_rows:
-                if en.grade is None:
-                    continue
-                ch = float(getattr(co, "credit_hours", 0) or 0)
-                if ch <= 0:
-                    continue
-                total_points += float(en.grade) * ch
-                total_credits += ch
-            
-            new_gpa = round(total_points / total_credits, 2) if total_credits > 0 else None
-            
-            student = db.get(Student, enrollment.student_id)
-            if student:
-                student.gpa = new_gpa
-                db.add(student)
-                db.commit()
-        
-        return {
-            **base,
-            "info": f"Enrollment {enrollment_id} updated successfully.",
-            "results_type": "enrollment",
-            "results": [{"id": enrollment.id, "student_id": enrollment.student_id, "course_id": enrollment.course_id, "grade": float(enrollment.grade) if enrollment.grade else None, "status": enrollment.status}],
-        }
-    
-    # -----------------------------
-    # ✅ DELETE Operations
-    # -----------------------------
-    
-    # delete_student
-    if intent == "delete_student":
-        _require_admin_or_hod(current_user)
-        
-        student_id = slots.get("student_id")
-        if not student_id:
-            return {**base, "info": "Please provide a student ID.", "results_type": None, "results": []}
-        
-        student = db.get(Student, student_id)
-        if not student:
-            return {**base, "info": f"Student with ID {student_id} not found.", "results_type": None, "results": []}
-        
-        db.delete(student)
-        db.commit()
-        
-        return {
-            **base,
-            "info": f"Student {student_id} deleted successfully.",
-            "results_type": None,
-            "results": [],
-        }
-    
-    # delete_teacher
-    if intent == "delete_teacher":
-        _require_admin_or_hod(current_user)
-        
-        teacher_id = slots.get("teacher_id")
-        if not teacher_id:
-            return {**base, "info": "Please provide a teacher ID.", "results_type": None, "results": []}
-        
-        teacher = db.get(Teacher, teacher_id)
-        if not teacher:
-            return {**base, "info": f"Teacher with ID {teacher_id} not found.", "results_type": None, "results": []}
-        
-        has_courses = db.query(Course).filter(Course.teacher_id == teacher_id).count() > 0
-        if has_courses:
-            return {**base, "info": f"Cannot delete teacher {teacher_id}: teacher has assigned courses.", "results_type": None, "results": []}
-        
-        db.delete(teacher)
-        db.commit()
-        
-        return {
-            **base,
-            "info": f"Teacher {teacher_id} deleted successfully.",
-            "results_type": None,
-            "results": [],
-        }
-    
-    # delete_course
-    if intent == "delete_course":
-        _require_admin_or_hod(current_user)
-        
-        course_id = slots.get("course_id")
-        course_code = slots.get("course_code")
-        
-        if not course_id and not course_code:
-            return {**base, "info": "Please provide a course ID or code.", "results_type": None, "results": []}
-        
-        if course_code and not course_id:
-            course = db.query(Course).filter(Course.code.ilike(course_code)).first()
-            if not course:
-                return {**base, "info": f"Course with code '{course_code}' not found.", "results_type": None, "results": []}
-            course_id = course.id
-        else:
-            course = db.get(Course, course_id)
-            if not course:
-                return {**base, "info": f"Course with ID {course_id} not found.", "results_type": None, "results": []}
-        
-        has_enrollments = db.query(Enrollment).filter(Enrollment.course_id == course_id).count() > 0
-        if has_enrollments:
-            return {**base, "info": f"Cannot delete course {course_id}: students are still enrolled.", "results_type": None, "results": []}
-        
-        db.delete(course)
-        db.commit()
-        
-        return {
-            **base,
-            "info": f"Course {course_id} deleted successfully.",
-            "results_type": None,
-            "results": [],
-        }
-    
-    # delete_enrollment
-    if intent == "delete_enrollment":
-        _require_admin_or_hod(current_user)
-        
-        enrollment_id = slots.get("enrollment_id")
-        student_id = slots.get("student_id")
-        course_id = slots.get("course_id")
-        
-        if enrollment_id:
-            enrollment = db.get(Enrollment, enrollment_id)
-            if not enrollment:
-                return {**base, "info": f"Enrollment with ID {enrollment_id} not found.", "results_type": None, "results": []}
-            db.delete(enrollment)
-            db.commit()
-            return {
-                **base,
-                "info": f"Enrollment {enrollment_id} deleted successfully.",
-                "results_type": None,
-                "results": [],
-            }
-        elif student_id and course_id:
-            enrollment = db.query(Enrollment).filter(
-                Enrollment.student_id == student_id,
-                Enrollment.course_id == course_id,
-            ).first()
-            if not enrollment:
-                return {**base, "info": f"Enrollment not found for student {student_id} in course {course_id}.", "results_type": None, "results": []}
-            db.delete(enrollment)
-            db.commit()
-            return {
-                **base,
-                "info": f"Enrollment deleted successfully for student {student_id} in course {course_id}.",
-                "results_type": None,
-                "results": [],
-            }
-        else:
-            return {**base, "info": "Please provide enrollment ID or both student ID and course ID.", "results_type": None, "results": []}
-    
-    # -----------------------------
-    # ✅ GET Operations (single item)
-    # -----------------------------
-    
-    # get_student
-    if intent == "get_student":
-        _require_admin_or_hod(current_user)
-        
-        student_id = slots.get("student_id")
-        if not student_id:
-            return {**base, "info": "Please provide a student ID.", "results_type": None, "results": []}
-        
-        student = db.get(Student, student_id)
-        if not student:
-            return {**base, "info": f"Student with ID {student_id} not found.", "results_type": "student", "results": []}
-        
-        return {
-            **base,
-            "info": f"Found student {student_id}.",
-            "results_type": "student",
-            "results": [{"id": student.id, "name": student.name, "department": student.department, "gpa": float(student.gpa) if student.gpa else None}],
-        }
-    
-    # get_teacher
-    if intent == "get_teacher":
-        _require_admin_or_hod(current_user)
-        
-        teacher_id = slots.get("teacher_id")
-        if not teacher_id:
-            return {**base, "info": "Please provide a teacher ID.", "results_type": None, "results": []}
-        
-        teacher = db.get(Teacher, teacher_id)
-        if not teacher:
-            return {**base, "info": f"Teacher with ID {teacher_id} not found.", "results_type": "teacher", "results": []}
-        
-        return {
-            **base,
-            "info": f"Found teacher {teacher_id}.",
-            "results_type": "teacher",
-            "results": [{"id": teacher.id, "name": teacher.name, "department": teacher.department, "email": teacher.email, "expertise": teacher.expertise}],
-        }
-    
-    # get_course
-    if intent == "get_course":
-        role = _role_value(current_user.role)
-        if role not in (UserRole.admin, UserRole.hod, UserRole.teacher, UserRole.student):
-            raise HTTPException(status_code=403, detail="Access required")
-        
-        course_id = slots.get("course_id")
-        course_code = slots.get("course_code")
-        
-        if not course_id and not course_code:
-            return {**base, "info": "Please provide a course ID or code.", "results_type": None, "results": []}
-        
-        if course_code and not course_id:
-            course = db.query(Course).filter(Course.code.ilike(course_code)).first()
-            if not course:
-                return {**base, "info": f"Course with code '{course_code}' not found.", "results_type": "course", "results": []}
-        else:
-            course = db.get(Course, course_id)
-            if not course:
-                return {**base, "info": f"Course with ID {course_id} not found.", "results_type": "course", "results": []}
-        
-        return {
-            **base,
-            "info": f"Found course {course.id}.",
-            "results_type": "course",
-            "results": [{"id": course.id, "title": course.title, "code": course.code, "credit_hours": course.credit_hours, "teacher_id": course.teacher_id}],
-        }
-    
     # -----------------------------
     # FINAL fallback
     # -----------------------------
