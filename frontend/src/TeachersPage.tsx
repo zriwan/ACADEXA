@@ -4,6 +4,10 @@ import { api } from "./api/client";
 import { Teacher } from "./types";
 import PasswordInput from "./PasswordInput";
 
+const alphaOnlyRegex = /^[A-Za-z ]+$/;
+
+const sanitizeAlphaInput = (value: string) => value.replace(/[^A-Za-z ]/g, "");
+
 type TeacherForm = {
   name: string;
   department: string;
@@ -36,6 +40,21 @@ const TeachersPage: React.FC = () => {
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [passwordCopied, setPasswordCopied] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const validateAlphaRequired = (value: string, label: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return `${label} is required`;
+    if (!alphaOnlyRegex.test(trimmed)) return `${label} must contain only alphabets and spaces`;
+    return "";
+  };
+
+  const validateAlphaOptional = (value: string | undefined, label: string) => {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return "";
+    if (!alphaOnlyRegex.test(trimmed)) return `${label} must contain only alphabets and spaces`;
+    return "";
+  };
 
   const copyPasswordToClipboard = async () => {
     if (createdInfo?.temp_password) {
@@ -82,10 +101,25 @@ const TeachersPage: React.FC = () => {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
+
+    const alphaFields = ["name", "department", "expertise"];
+    const nextValue = alphaFields.includes(name) ? sanitizeAlphaInput(value) : value;
+
     setForm((prev) => ({
       ...prev,
-      [name]: value,
+      [name]: nextValue,
     }));
+
+    if (name === "name" || name === "department") {
+      const label = name === "name" ? "Name" : "Department";
+      const msg = validateAlphaRequired(nextValue, label);
+      setFieldErrors((prev) => ({ ...prev, [name]: msg }));
+    }
+
+    if (name === "expertise") {
+      const msg = validateAlphaOptional(nextValue, "Expertise");
+      setFieldErrors((prev) => ({ ...prev, expertise: msg }));
+    }
   };
 
   const resetForm = () => {
@@ -99,10 +133,28 @@ const TeachersPage: React.FC = () => {
     setEditingId(null);
     setCreatedInfo(null);
     setPasswordCopied(false);
+    setFieldErrors({});
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const nameError = validateAlphaRequired(form.name, "Name");
+    const departmentError = validateAlphaRequired(form.department, "Department");
+    const expertiseError = validateAlphaOptional(form.expertise, "Expertise");
+
+    const nextErrors = {
+      name: nameError,
+      department: departmentError,
+      expertise: expertiseError,
+    };
+    setFieldErrors(nextErrors);
+
+    if (nameError || departmentError || expertiseError) {
+      setError("Please fix form errors before submitting.");
+      return;
+    }
+
     try {
       setError(null);
       setCreatedInfo(null);
@@ -191,11 +243,21 @@ const TeachersPage: React.FC = () => {
             <div className="form-row">
               <label>Name</label>
               <input name="name" value={form.name} onChange={handleChange} required />
+              {fieldErrors.name && (
+                <div className="alert alert-error" style={{ marginTop: 8 }}>
+                  {fieldErrors.name}
+                </div>
+              )}
             </div>
 
             <div className="form-row">
               <label>Department</label>
               <input name="department" value={form.department} onChange={handleChange} required />
+              {fieldErrors.department && (
+                <div className="alert alert-error" style={{ marginTop: 8 }}>
+                  {fieldErrors.department}
+                </div>
+              )}
             </div>
 
             <div className="form-row">
@@ -206,6 +268,11 @@ const TeachersPage: React.FC = () => {
             <div className="form-row">
               <label>Expertise</label>
               <input name="expertise" value={form.expertise ?? ""} onChange={handleChange} />
+              {fieldErrors.expertise && (
+                <div className="alert alert-error" style={{ marginTop: 8 }}>
+                  {fieldErrors.expertise}
+                </div>
+              )}
             </div>
 
             {/* ✅ NEW: password only on CREATE */}

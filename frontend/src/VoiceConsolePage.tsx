@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/client";
 
 type SpeechRecognitionType = any;
+type MicPermission = "unknown" | "granted" | "denied" | "prompt" | "unsupported";
 
 type Me = {
   id: number;
@@ -21,6 +22,13 @@ type HistoryItem = {
   error?: string | null;
 };
 
+type MicCaptureState = {
+  stream: MediaStream | null;
+  recorder: MediaRecorder | null;
+  chunks: Blob[];
+  timerId: number | null;
+};
+
 function makeId() {
   return Math.random().toString(16).slice(2) + Date.now().toString(16);
 }
@@ -28,6 +36,8 @@ function makeId() {
 const VoiceConsolePage: React.FC = () => {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [micBusy, setMicBusy] = useState(false);
+  const [transcribingMic, setTranscribingMic] = useState(false);
 
   // auth/me
   const [me, setMe] = useState<Me | null>(null);
@@ -35,6 +45,7 @@ const VoiceConsolePage: React.FC = () => {
   // voice states
   const [listening, setListening] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(true);
+  const [micPermission, setMicPermission] = useState<MicPermission>("unknown");
 
   const [error, setError] = useState<string | null>(null);
   const [responseJson, setResponseJson] = useState<any | null>(null);
@@ -43,14 +54,204 @@ const VoiceConsolePage: React.FC = () => {
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
   const recognitionRef = useRef<SpeechRecognitionType | null>(null);
+  const shouldKeepListeningRef = useRef(false);
+  const noSpeechRetriesRef = useRef(0);
+  const autoSendTimerRef = useRef<number | null>(null);
+  const finalizedTranscriptRef = useRef("");
+  const loadingRef = useRef(false);
+  const captureRef = useRef<MicCaptureState>({
+    stream: null,
+    recorder: null,
+    chunks: [],
+    timerId: null,
+  });
 
   const [showRaw, setShowRaw] = useState(false);
+
+  const isSecureContextOk = window.isSecureContext;
+
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
 
   // Detect SpeechRecognition support (Chrome/Edge)
   const SpeechRecognitionCtor = useMemo(() => {
     const w: any = window;
     return w.SpeechRecognition || w.webkitSpeechRecognition || null;
   }, []);
+
+  const micSupported = useMemo(() => {
+    return typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  }, []);
+
+  useEffect(() => {
+    setVoiceSupported(!!SpeechRecognitionCtor || micSupported);
+  }, [SpeechRecognitionCtor, micSupported]);
+
+  const clearAutoSendTimer = () => {
+    if (autoSendTimerRef.current) {
+      window.clearTimeout(autoSendTimerRef.current);
+      autoSendTimerRef.current = null;
+    }
+  };
+
+  const toBase64 = (bytes: Uint8Array) => {
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      for (let j = 0; j < chunk.length; j += 1) {
+        binary += String.fromCharCode(chunk[j]);
+      }
+    }
+    return window.btoa(binary);
+  };
+
+  const floatTo16BitPCM = (float32: Float32Array) => {
+    const int16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i += 1) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    return int16;
+  };
+
+  const decodeAudioToPCM = async (blob: Blob) => {
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioContext = new AudioContext();
+    const decoded = await audioContext.decodeAudioData(arrayBuffer.slice(0));
+
+    const targetSampleRate = 16000;
+    const duration = decoded.duration;
+    const frameCount = Math.ceil(duration * targetSampleRate);
+    const offline = new OfflineAudioContext(1, frameCount, targetSampleRate);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start(0);
+
+    const rendered = await offline.startRendering();
+    const mono = rendered.getChannelData(0);
+    const pcm = floatTo16BitPCM(mono);
+    const base64 = toBase64(new Uint8Array(pcm.buffer));
+
+    try {
+      await audioContext.close();
+    } catch {
+      // ignore
+    }
+
+    return { pcmBase64: base64, sampleRate: targetSampleRate };
+  };
+
+  const stopMicCapture = async (): Promise<MicCaptureState> => {
+    const capture = captureRef.current;
+    const finalized: MicCaptureState = {
+      stream: capture.stream,
+      recorder: capture.recorder,
+      chunks: capture.chunks.slice(),
+      timerId: null,
+    };
+
+    if (capture.timerId) {
+      window.clearTimeout(capture.timerId);
+      capture.timerId = null;
+    }
+
+    if (capture.recorder && capture.recorder.state !== "inactive") {
+      await new Promise<void>((resolve) => {
+        let settled = false;
+
+        const finalize = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        };
+
+        const onData = (event: BlobEvent) => {
+          if (event.data && event.data.size > 0) {
+            finalized.chunks.push(event.data);
+          }
+        };
+
+        const onStop = () => finalize();
+
+        const cleanup = () => {
+          capture.recorder?.removeEventListener("dataavailable", onData);
+          capture.recorder?.removeEventListener("stop", onStop);
+        };
+
+        capture.recorder?.addEventListener("dataavailable", onData);
+        capture.recorder?.addEventListener("stop", onStop);
+
+        try {
+          if (capture.recorder?.state === "recording") {
+            capture.recorder.requestData();
+          }
+          capture.recorder?.stop();
+        } catch {
+          finalize();
+          return;
+        }
+
+        window.setTimeout(() => finalize(), 1000);
+      });
+    }
+
+    if (capture.stream) {
+      capture.stream.getTracks().forEach((track) => track.stop());
+    }
+
+    captureRef.current = {
+      stream: null,
+      recorder: null,
+      chunks: [],
+      timerId: null,
+    };
+
+    return finalized;
+  };
+
+  const transcribeCapturedAudio = async (capture: MicCaptureState) => {
+    const chunks = capture.chunks;
+
+    if (!chunks.length) {
+      setError("No audio captured. Please try again.");
+      setMicBusy(false);
+      setTranscribingMic(false);
+      return;
+    }
+
+    try {
+      setTranscribingMic(true);
+      const blob = new Blob(chunks, { type: chunks[0].type || "audio/webm" });
+      const { pcmBase64, sampleRate } = await decodeAudioToPCM(blob);
+
+      const res = await api.post("/voice/transcribe_pcm", {
+        pcm_b64: pcmBase64,
+        sample_rate: sampleRate,
+      });
+
+      const transcript = (res.data?.text || "").trim();
+      if (!transcript) {
+        setError("No speech detected. Please try again.");
+      } else {
+        setText(transcript);
+        setError(null);
+      }
+    } catch (e: any) {
+      const msg =
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Could not transcribe microphone audio.";
+      setError(msg);
+    } finally {
+      setTranscribingMic(false);
+      setMicBusy(false);
+      shouldKeepListeningRef.current = false;
+    }
+  };
 
   // load me
   useEffect(() => {
@@ -66,64 +267,56 @@ const VoiceConsolePage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!SpeechRecognitionCtor) {
-      setVoiceSupported(false);
-      return;
+    let permissionStatus: PermissionStatus | null = null;
+
+    async function loadMicPermission() {
+      const permissionsApiAvailable =
+        typeof navigator !== "undefined" &&
+        !!navigator.permissions &&
+        !!navigator.permissions.query;
+
+      if (!permissionsApiAvailable) {
+        setMicPermission("unknown");
+        return;
+      }
+
+      try {
+        permissionStatus = await navigator.permissions.query({
+          name: "microphone" as PermissionName,
+        });
+
+        const state = permissionStatus.state;
+        if (state === "granted" || state === "denied" || state === "prompt") {
+          setMicPermission(state);
+        } else {
+          setMicPermission("unknown");
+        }
+
+        permissionStatus.onchange = () => {
+          const next = permissionStatus?.state;
+          if (next === "granted" || next === "denied" || next === "prompt") {
+            setMicPermission(next);
+          } else {
+            setMicPermission("unknown");
+          }
+        };
+      } catch {
+        setMicPermission("unknown");
+      }
     }
 
-    const rec = new SpeechRecognitionCtor();
-    rec.continuous = false; // single utterance
-    rec.interimResults = true;
-    rec.lang = "en-US"; // change if you want (e.g. "ur-PK")
-
-    rec.onstart = () => {
-      setListening(true);
-      setError(null);
-    };
-
-    rec.onend = () => {
-      setListening(false);
-    };
-
-    rec.onerror = (e: any) => {
-      setListening(false);
-
-      if (e?.error === "not-allowed" || e?.error === "service-not-allowed") {
-        setError(
-          "Microphone permission denied. Allow mic permission in browser site settings, then reload."
-        );
-      } else if (e?.error === "no-speech") {
-        setError("No speech detected. Try again and speak clearly.");
-      } else {
-        setError(`Speech recognition error: ${e?.error || "unknown"}`);
-      }
-    };
-
-    rec.onresult = (event: any) => {
-      let transcript = "";
-      let finalTranscript = "";
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i];
-        const chunk = res[0]?.transcript || "";
-        transcript += chunk;
-
-        if (res.isFinal) {
-          finalTranscript += chunk;
-        }
-      }
-
-      const merged = (finalTranscript || transcript).trim();
-      if (merged) {
-        setText(merged);
-      }
-    };
-
-    recognitionRef.current = rec;
+    loadMicPermission();
 
     return () => {
+      if (permissionStatus) {
+        permissionStatus.onchange = null;
+      }
+      shouldKeepListeningRef.current = false;
+      noSpeechRetriesRef.current = 0;
+      clearAutoSendTimer();
+      void stopMicCapture();
       try {
-        rec.stop();
+        recognitionRef.current?.stop();
       } catch {
         // ignore
       }
@@ -131,45 +324,237 @@ const VoiceConsolePage: React.FC = () => {
     };
   }, [SpeechRecognitionCtor]);
 
-  const startListening = () => {
+  const scheduleAutoSendFromTranscript = () => {
+    clearAutoSendTimer();
+    autoSendTimerRef.current = window.setTimeout(async () => {
+      const command = finalizedTranscriptRef.current.trim();
+      if (!command) return;
+
+      if (loadingRef.current) {
+        scheduleAutoSendFromTranscript();
+        return;
+      }
+
+      finalizedTranscriptRef.current = "";
+      setText(command);
+      await sendCommand(command);
+    }, 1200);
+  };
+
+  const startListening = async () => {
     setError(null);
 
-    if (!voiceSupported || !recognitionRef.current) {
+    if (!micSupported) {
+      setError("Microphone capture is not supported in this browser.");
+      return;
+    }
+
+    if (!isSecureContextOk) {
       setError(
-        "Speech recognition is not supported in this browser. Use Chrome/Edge, or type the command."
+        "Microphone requires a secure context. Open the app on localhost/https and try again."
       );
       return;
     }
 
+    if (micBusy || listening) {
+      return;
+    }
+
+    finalizedTranscriptRef.current = "";
+    clearAutoSendTimer();
+
+    if (SpeechRecognitionCtor) {
+      try {
+        const recognition = new SpeechRecognitionCtor();
+        recognition.lang = "en-US";
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = () => {
+          setListening(true);
+          setMicBusy(true);
+          setMicPermission("granted");
+        };
+
+        recognition.onresult = (event: any) => {
+          let finalChunk = "";
+          let interimChunk = "";
+
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const result = event.results[i];
+            const piece = result?.[0]?.transcript?.trim() || "";
+            if (!piece) continue;
+
+            if (result.isFinal) {
+              finalChunk = `${finalChunk} ${piece}`.trim();
+            } else {
+              interimChunk = `${interimChunk} ${piece}`.trim();
+            }
+          }
+
+          if (finalChunk) {
+            finalizedTranscriptRef.current = `${finalizedTranscriptRef.current} ${finalChunk}`.trim();
+            scheduleAutoSendFromTranscript();
+          }
+
+          const liveText = `${finalizedTranscriptRef.current} ${interimChunk}`.trim();
+          setText(liveText);
+          setError(null);
+        };
+
+        recognition.onerror = (event: any) => {
+          const err = event?.error || "";
+          if (err === "not-allowed" || err === "service-not-allowed") {
+            setMicPermission("denied");
+            setError("Microphone permission denied. Allow mic access and try again.");
+            shouldKeepListeningRef.current = false;
+            setListening(false);
+            setMicBusy(false);
+            clearAutoSendTimer();
+            return;
+          }
+
+          if (err === "no-speech") {
+            return;
+          }
+
+          setError("Mic could not capture speech clearly. Please speak again.");
+        };
+
+        recognition.onend = () => {
+          if (shouldKeepListeningRef.current) {
+            try {
+              recognition.start();
+              return;
+            } catch {
+              // ignore and fall through to idle state
+            }
+          }
+
+          setListening(false);
+          setMicBusy(false);
+          clearAutoSendTimer();
+        };
+
+        recognitionRef.current = recognition;
+        shouldKeepListeningRef.current = true;
+        recognition.start();
+        return;
+      } catch {
+        setError("Could not start live mic recognition. Falling back to capture mode.");
+      }
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Browser does not support microphone access. Use latest Chrome or Edge.");
+      return;
+    }
+
     try {
-      recognitionRef.current.start();
-    } catch {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setMicPermission("granted");
+      setListening(true);
+      setMicBusy(true);
+      shouldKeepListeningRef.current = true;
+      noSpeechRetriesRef.current = 0;
+
+      const mimeCandidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+      ];
+      const mimeType =
+        mimeCandidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ||
+        "";
+
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+      captureRef.current = {
+        stream,
+        recorder,
+        chunks: [],
+        timerId: null,
+      };
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          captureRef.current.chunks.push(event.data);
+        }
+      };
+
+      recorder.start(250);
+
+      captureRef.current.timerId = window.setTimeout(() => {
+        if (shouldKeepListeningRef.current) {
+          void stopListening();
+        }
+      }, 5000);
+    } catch (e: any) {
+      const errName = e?.name || "";
+      if (errName === "NotAllowedError" || errName === "SecurityError") {
+        setMicPermission("denied");
+        setError(
+          "Microphone permission denied. Allow mic access for this site and try again."
+        );
+        return;
+      }
+      if (errName === "NotFoundError" || errName === "DevicesNotFoundError") {
+        setError("No microphone found. Connect a mic and try again.");
+        return;
+      }
       setError("Could not start microphone. Please try again.");
     }
   };
 
-  const stopListening = () => {
-    try {
-      recognitionRef.current?.stop();
-    } catch {
-      // ignore
+  const stopListening = async () => {
+    shouldKeepListeningRef.current = false;
+    noSpeechRetriesRef.current = 0;
+    setListening(false);
+    clearAutoSendTimer();
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // ignore
+      }
+      recognitionRef.current = null;
+      setMicBusy(false);
+      return;
     }
+
+    const capture = captureRef.current;
+
+    if (!micBusy && !capture.stream) {
+      return;
+    }
+
+    const snapshot = await stopMicCapture();
+    await transcribeCapturedAudio(snapshot);
   };
 
   const pushHistory = (item: HistoryItem) => {
     setHistory((prev) => {
-      const next = [item, ...prev];
+      const next = [item].concat(prev);
       return next.slice(0, 10);
     });
   };
 
   const updateHistory = (id: string, patch: Partial<HistoryItem>) => {
     setHistory((prev) =>
-      prev.map((h) => (h.id === id ? { ...h, ...patch } : h))
+      prev.map((h) => {
+        if (h.id === id) {
+          return Object.assign({}, h, patch);
+        }
+        return h;
+      })
     );
   };
 
   const sendCommand = async (overrideText?: string) => {
+    if (loadingRef.current) return;
+
     const command = (overrideText ?? text).trim();
     if (!command) return;
 
@@ -548,6 +933,19 @@ const VoiceConsolePage: React.FC = () => {
             >
               {voiceSupported ? "Mic Ready" : "Mic Unavailable"}
             </span>
+            {voiceSupported && (
+              <span
+                className={`chip ${
+                  micPermission === "granted"
+                    ? "chip-success"
+                    : micPermission === "denied"
+                    ? "chip-danger"
+                    : "chip-muted"
+                }`}
+              >
+                Mic Permission: {micPermission}
+              </span>
+            )}
             <span className={`chip ${listening ? "chip-info" : "chip-muted"}`}>
               {listening ? "Listening" : "Idle"}
             </span>

@@ -19,6 +19,7 @@ import StudentAttendancePage from "./StudentAttendancePage";
 import AdminFeesPage from "./AdminFeesPage";
 import DarkModeToggle from "./DarkModeToggle";
 import { useDarkMode } from "./DarkModeToggle";
+import { connectMetaMask, hasEthereum } from "./utils/wallet";
 
 type Me = {
   id: number;
@@ -122,6 +123,9 @@ function App() {
   // Initialize dark mode
   useDarkMode();
 
+  // Wallet state (declare hooks unconditionally)
+  const [walletAccounts, setWalletAccounts] = useState<string[] | null>(null);
+
   async function loadMe() {
     try {
       const res = await api.get("/auth/me");
@@ -181,6 +185,20 @@ function App() {
     setMe(null);
     setTab("voice");
     window.dispatchEvent(new Event("acadexa-auth-changed"));
+  };
+
+  const handleConnectWallet = async () => {
+    if (!hasEthereum()) {
+      alert("MetaMask not detected. Please install or enable the MetaMask extension.");
+      return;
+    }
+    const accounts = await connectMetaMask();
+    if (accounts && accounts.length) {
+      setWalletAccounts(accounts as string[]);
+    } else {
+      // user denied or connection failed
+      setWalletAccounts(null);
+    }
   };
 
   const getInitials = (name: string) => {
@@ -337,33 +355,6 @@ function App() {
             </div>
           )}
 
-          {/* Attendance Section */}
-          <div className="sidebar-section">
-            <div className="sidebar-section-title">Attendance</div>
-            {isTeacher && (
-              <button
-                onClick={() => setTab("teacher_attendance")}
-                className={`sidebar-item ${tab === "teacher_attendance" ? "active" : ""}`}
-              >
-                <span className="sidebar-item-icon">
-                  <IconCalendar />
-                </span>
-                <span>Record Attendance</span>
-              </button>
-            )}
-            {isStudent && (
-              <button
-                onClick={() => setTab("student_attendance")}
-                className={`sidebar-item ${tab === "student_attendance" ? "active" : ""}`}
-              >
-                <span className="sidebar-item-icon">
-                  <IconCalendar />
-                </span>
-                <span>My Attendance</span>
-              </button>
-            )}
-          </div>
-
           {/* Tools Section */}
           <div className="sidebar-section">
             <div className="sidebar-section-title">Tools</div>
@@ -401,7 +392,17 @@ function App() {
             <h1 className="page-title">{getPageTitle()}</h1>
             <p className="page-subtitle">{getPageSubtitle()}</p>
           </div>
-          <DarkModeToggle />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <DarkModeToggle />
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleConnectWallet}
+              title={walletAccounts ? `Connected: ${walletAccounts[0]}` : "Connect MetaMask"}
+            >
+              {walletAccounts ? `${walletAccounts[0].slice(0, 6)}...` : "Connect Wallet"}
+            </button>
+          </div>
         </div>
 
         <div className="content-area">

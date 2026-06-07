@@ -103,7 +103,7 @@ type AttendanceMyCourseRes = {
 };
 
 
-type OpenTab = "profile" | "gpa" | "courses" | "enrollments" | "attendance" | "grades" | "fees" | "registration";
+type OpenTab = "profile" | "gpa" | "courses" | "enrollments" | "grades" | "fees" | "registration";
 
 function toNumberSafe(v: unknown): number {
   if (v === null || v === undefined) return 0;
@@ -116,9 +116,6 @@ const StudentHome: React.FC = () => {
   const [gpa, setGpa] = useState<GPARes | null>(null);
   const [courses, setCourses] = useState<CoursesRes | null>(null);
   const [enrollments, setEnrollments] = useState<EnrollmentItem[] | null>(null);
-
-  const [attendanceCourseId, setAttendanceCourseId] = useState<number | null>(null);
-  const [attendance, setAttendance] = useState<AttendanceMyCourseRes | null>(null);
 
   const [gradeSummary, setGradeSummary] = useState<GradeSummary[] | null>(null);
   const [gradeDetail, setGradeDetail] = useState<GradeDetail | null>(null);
@@ -155,9 +152,6 @@ const StudentHome: React.FC = () => {
       setCourses(c.data);
       setEnrollments(e.data);
 
-      setAttendance(null);
-      setAttendanceCourseId(null);
-
       setGradeSummary(null);
       setGradeDetail(null);
       setFee(null);
@@ -168,32 +162,6 @@ const StudentHome: React.FC = () => {
       setLoading(false);
     }
   };
-
-  // ✅ Attendance (SAFE)
-  const loadAttendance = async (courseId: number) => {
-  try {
-    setLoading(true);
-    setError(null);
-
-    const res = await api.get<AttendanceMyCourseRes>(`/attendance/my/course/${courseId}`);
-
-    const data = res.data as AttendanceMyCourseRes;
-
-    // ✅ backend uses rows, frontend expects records
-    const normalized: AttendanceMyCourseRes = {
-      ...data,
-      records: (data.records ?? data.rows ?? []) as AttendanceRecord[],
-    };
-
-    setAttendance(normalized);
-  } catch (err: any) {
-    console.error(err);
-    setError("Failed to load attendance.");
-  } finally {
-    setLoading(false);
-  }
-};
-
 
   const loadGrades = async () => {
     try {
@@ -313,27 +281,14 @@ const StudentHome: React.FC = () => {
     setOpen(key);
 
     if (key === "grades" && gradeSummary === null) loadGrades();
-    if (key === "fees" && fee === null) loadFees();
-
-    if (key === "attendance") {
-      const firstCourse = courses?.courses?.[0]?.course_id ?? null;
-      const cid = attendanceCourseId ?? firstCourse;
-      if (cid) {
-        setAttendanceCourseId(cid);
-        loadAttendance(cid);
-      } else {
-        setAttendance(null);
-      }
-    }
+    if (key === "fees") loadFees();
   };
-
-  const attendanceRecords = attendance?.records ?? [];
 
   return (
     <div style={{ padding: 20, maxWidth: 980, margin: "0 auto" }}>
       <h1 style={{ fontSize: 28, marginBottom: 6 }}>Student Dashboard</h1>
       <p style={{ color: "#666", marginTop: 0 }}>
-        View your profile, GPA, courses, enrollments, attendance, grades and fee status.
+        View your profile, GPA, courses, enrollments, grades and fee status.
       </p>
 
       <div className="dashboard-tabs">
@@ -354,12 +309,6 @@ const StudentHome: React.FC = () => {
           onClick={() => toggle("enrollments")}
         >
           Enrollments
-        </button>
-        <button
-          className={"tab-pill" + (open === "attendance" ? " active" : "")}
-          onClick={() => toggle("attendance")}
-        >
-          Attendance
         </button>
         <button className={"tab-pill" + (open === "grades" ? " active" : "")} onClick={() => toggle("grades")}>
           Grades
@@ -500,81 +449,6 @@ const StudentHome: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* ✅ ATTENDANCE */}
-      {open === "attendance" && (
-        <section className="card" style={{ marginTop: 18 }}>
-          <div className="card-header" style={{ display: "flex", justifyContent: "space-between" }}>
-            <h2 className="card-title">My Attendance</h2>
-            <button
-              className="btn btn-secondary"
-              onClick={() => attendanceCourseId && loadAttendance(attendanceCourseId)}
-              disabled={!attendanceCourseId}
-            >
-              Refresh Attendance
-            </button>
-          </div>
-
-          <div className="card-body">
-            {!courses?.courses?.length ? (
-              <p>No courses found.</p>
-            ) : (
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <label>
-                  <b>Select Course:</b>
-                </label>
-                <select
-                  value={attendanceCourseId ?? ""}
-                  onChange={(e) => {
-                    const cid = e.target.value ? Number(e.target.value) : null;
-                    setAttendanceCourseId(cid);
-                    setAttendance(null);
-                    if (cid) loadAttendance(cid);
-                  }}
-                >
-                  <option value="">-- choose --</option>
-                  {courses.courses.map((c) => (
-                    <option key={c.course_id} value={c.course_id}>
-                      {c.code} — {c.title}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {!attendance ? (
-              <p style={{ marginTop: 12 }}>Select a course to view attendance.</p>
-            ) : attendanceRecords.length === 0 ? (
-              <p style={{ marginTop: 12 }}>No attendance records yet.</p>
-            ) : (
-              <table className="table" style={{ marginTop: 12 }}>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Session ID</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {attendanceRecords.map((r) => (
-                    <tr key={`${r.session_id}-${r.lecture_date}`}>
-                      <td>{r.lecture_date}</td>
-                      <td>{r.session_id}</td>
-                      <td style={{ fontWeight: 700 }}>{r.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            {attendanceCourseId && (
-              <div style={{ marginTop: 10, color: "#666" }}>
-                Course: <b>{courseMap.get(attendanceCourseId)?.code ?? `#${attendanceCourseId}`}</b>
-              </div>
             )}
           </div>
         </section>

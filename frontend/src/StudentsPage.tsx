@@ -4,6 +4,10 @@ import { api } from "./api/client";
 import { Student, StudentCreatePayload } from "./types";
 import PasswordInput from "./PasswordInput";
 
+const alphaOnlyRegex = /^[A-Za-z ]+$/;
+
+const sanitizeAlphaInput = (value: string) => value.replace(/[^A-Za-z ]/g, "");
+
 const StudentsPage: React.FC = () => {
   const [meEmail, setMeEmail] = useState<string | null>(null);
 
@@ -21,6 +25,14 @@ const StudentsPage: React.FC = () => {
   });
 
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const validateAlphaRequired = (value: string, label: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return `${label} is required`;
+    if (!alphaOnlyRegex.test(trimmed)) return `${label} must contain only alphabets and spaces`;
+    return "";
+  };
 
   const fetchMe = async () => {
     try {
@@ -52,19 +64,44 @@ const StudentsPage: React.FC = () => {
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
+
+    const alphaFields = ["name", "department"];
+    const nextValue = alphaFields.includes(name) ? sanitizeAlphaInput(value) : value;
+
     setForm((prev) => ({
       ...prev,
-      [name]: name === "gpa" || name === "current_semester" ? Number(value) : value,
+      [name]: name === "gpa" || name === "current_semester" ? Number(nextValue) : nextValue,
     }));
+
+    if (name === "name" || name === "department") {
+      const label = name === "name" ? "Name" : "Department";
+      const msg = validateAlphaRequired(nextValue, label);
+      setFieldErrors((prev) => ({ ...prev, [name]: msg }));
+    }
   };
 
   const resetForm = () => {
     setForm({ name: "", department: "", gpa: 0, email: "", password: "", current_semester: 1 }); // ✅ clear email/password too
     setEditingId(null);
+    setFieldErrors({});
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const nameError = validateAlphaRequired(form.name, "Name");
+    const departmentError = validateAlphaRequired(form.department, "Department");
+
+    const nextErrors = {
+      name: nameError,
+      department: departmentError,
+    };
+    setFieldErrors(nextErrors);
+
+    if (nameError || departmentError) {
+      setError("Please fix form errors before submitting.");
+      return;
+    }
 
     try {
       setError(null);
@@ -157,6 +194,11 @@ const StudentsPage: React.FC = () => {
                 onChange={handleChange}
                 required
               />
+              {fieldErrors.name && (
+                <div className="alert alert-error" style={{ marginTop: "0.5rem" }}>
+                  {fieldErrors.name}
+                </div>
+              )}
             </div>
 
             <div className="form-row">
@@ -167,6 +209,11 @@ const StudentsPage: React.FC = () => {
                 onChange={handleChange}
                 required
               />
+              {fieldErrors.department && (
+                <div className="alert alert-error" style={{ marginTop: "0.5rem" }}>
+                  {fieldErrors.department}
+                </div>
+              )}
             </div>
 
             <div className="form-row">
